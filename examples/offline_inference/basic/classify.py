@@ -20,16 +20,16 @@ SETUP REQUIREMENTS:
 USAGE EXAMPLES:
 
 Quick Test (450 samples, 3-shot):
-    python classify.py --num_samples 450 --few_shot_examples 3
+    python examples/offline_inference/basic/classify.py --num-samples 450 --few-shot-examples 3
 
 Full Experiment (1800 samples, test 1,2,3,5-shot configs):
-    python classify.py --experiment
+    python examples/offline_inference/basic/classify.py --experiment
 
 Custom Experiment with Report:
-    python classify.py --experiment --output_report my_results.json
+    python examples/offline_inference/basic/classify.py --experiment --output-report my_results.json
 
 Different Model:
-    python classify.py --model microsoft/DialoGPT-large --num_samples 200
+    python examples/offline_inference/basic/classify.py --model microsoft/DialoGPT-large --num-samples 200
 
 WHAT IT DOES:
 - Loads patent classification dataset (9 classes) with stratified sampling
@@ -67,13 +67,13 @@ def parse_args():
     parser = EngineArgs.add_cli_args(parser)
     # Add custom arguments for patent classification
     parser.add_argument(
-        "--num_samples", 
+        "--num-samples", 
         type=int, 
         default=DEFAULT_TOTAL_SAMPLES, 
         help=f"Total number of samples to classify from the dataset (default: {DEFAULT_TOTAL_SAMPLES}, ~{DEFAULT_SAMPLES_PER_CLASS} per class)"
     )
     parser.add_argument(
-        "--few_shot_examples", 
+        "--few-shot-examples", 
         type=int, 
         default=DEFAULT_FEW_SHOT_EXAMPLES, 
         help=f"Number of examples per class for few-shot prompting (default: {DEFAULT_FEW_SHOT_EXAMPLES})"
@@ -84,7 +84,7 @@ def parse_args():
         help="Run full experiment with multiple few-shot configurations and generate detailed report"
     )
     parser.add_argument(
-        "--output_report", 
+        "--output-report", 
         type=str, 
         default="patent_classification_report.json", 
         help="Output file for experiment report (JSON format)"
