@@ -34,8 +34,11 @@ def parse_args():
         help=f"Number of examples per class for few-shot prompting (default: {DEFAULT_FEW_SHOT_EXAMPLES})"
     )
     # Set example specific arguments - using a more powerful model for few-shot classification
+    # NOTE: Llama models require HuggingFace authentication
+    # Run: huggingface-cli login or set HF_TOKEN environment variable
+    # Accept license at: https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct
     parser.set_defaults(
-        model="meta-llama/Llama-3.2-3B-Instruct",  # Better model for few-shot prompting
+        model="meta-llama/Meta-Llama-3.1-8B-Instruct",  # Larger model for better few-shot prompting
         enforce_eager=True,
     )
     return parser.parse_args()
