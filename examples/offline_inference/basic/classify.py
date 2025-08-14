@@ -270,7 +270,11 @@ def main(args: Namespace):
 
     # Create an LLM for few-shot prompting
     print(f"Initializing model: {args.model}")
-    llm = LLM(**vars(args))
+    
+    # Filter out custom arguments that aren't part of EngineArgs
+    engine_args = {k: v for k, v in vars(args).items() 
+                   if k not in ['num_samples', 'few_shot_examples']}
+    llm = LLM(**engine_args)
 
     # Generate few-shot prompts
     print("Creating few-shot prompts...")
