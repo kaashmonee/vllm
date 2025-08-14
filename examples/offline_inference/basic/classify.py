@@ -185,6 +185,8 @@ def stratified_sample_dataset(dataset, num_samples=DEFAULT_TOTAL_SAMPLES):
         )
         
         for idx in selected_indices:
+            # Convert numpy int64 to regular int for dataset indexing
+            idx = int(idx)
             sampled_texts.append(dataset["text"][idx])
             sampled_labels.append(dataset["label"][idx])
     
@@ -211,7 +213,7 @@ def load_few_shot_examples(num_examples_per_class=DEFAULT_FEW_SHOT_EXAMPLES):
             # Sample a few examples
             if len(class_examples) >= num_examples_per_class:
                 selected = np.random.choice(len(class_examples), num_examples_per_class, replace=False)
-                examples[class_id] = [class_examples[i][0][:MAX_TEXT_LENGTH_FOR_EXAMPLES] for i in selected]
+                examples[class_id] = [class_examples[int(i)][0][:MAX_TEXT_LENGTH_FOR_EXAMPLES] for i in selected]
             
         return examples
         
