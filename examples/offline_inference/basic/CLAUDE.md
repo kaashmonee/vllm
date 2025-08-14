@@ -1,0 +1,1 @@
+- do not use magic numbers like 450. always make sure you use constants and document the reason for choosing that number
