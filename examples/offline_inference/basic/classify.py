@@ -144,8 +144,8 @@ MAX_TEXT_LENGTH_FOR_EXAMPLES = 200
 MAX_TEXT_LENGTH_FOR_DISPLAY = 150
 
 # Model generation parameters
-CLASSIFICATION_TEMPERATURE = 0.1  # Low temperature for consistent classification
-MAX_CLASSIFICATION_TOKENS = 10    # Only need a few tokens for class prediction
+CLASSIFICATION_TEMPERATURE = 0.0  # Very low temperature for deterministic classification
+MAX_CLASSIFICATION_TOKENS = 5     # Reduce tokens to force shorter responses
 RESPONSE_PARSE_WINDOW = 10        # Look for class numbers in first 10 chars of response
 
 # Report configuration
@@ -194,7 +194,7 @@ def stratified_sample_dataset(dataset, num_samples=DEFAULT_TOTAL_SAMPLES):
 
 
 def load_few_shot_examples(num_examples_per_class=DEFAULT_FEW_SHOT_EXAMPLES):
-    """Load few-shot examples for prompting."""
+    """Load high-quality few-shot examples for prompting with better selection strategy."""
     if not DATASETS_AVAILABLE:
         return {}
     
@@ -210,16 +210,76 @@ def load_few_shot_examples(num_examples_per_class=DEFAULT_FEW_SHOT_EXAMPLES):
                 if label == class_id
             ]
             
-            # Sample a few examples
             if len(class_examples) >= num_examples_per_class:
-                selected = np.random.choice(len(class_examples), num_examples_per_class, replace=False)
-                examples[class_id] = [class_examples[int(i)][0][:MAX_TEXT_LENGTH_FOR_EXAMPLES] for i in selected]
+                # Better selection strategy: choose diverse, clear examples
+                selected_examples = []
+                
+                # Sort by text length and choose examples of different lengths
+                class_examples.sort(key=lambda x: len(x[0]))
+                
+                # Select examples from different parts of the length distribution
+                step = len(class_examples) // (num_examples_per_class + 1)
+                for i in range(num_examples_per_class):
+                    idx = (i + 1) * step
+                    if idx < len(class_examples):
+                        example_text = class_examples[idx][0]
+                        
+                        # Filter out very short or very generic examples
+                        if len(example_text) > 50 and not is_generic_example(example_text):
+                            # Clean and truncate the example
+                            clean_example = clean_patent_text(example_text[:MAX_TEXT_LENGTH_FOR_EXAMPLES])
+                            selected_examples.append(clean_example)
+                
+                # If we don't have enough good examples, fall back to random selection
+                if len(selected_examples) < num_examples_per_class:
+                    np.random.shuffle(class_examples)
+                    for text, _ in class_examples:
+                        if len(selected_examples) >= num_examples_per_class:
+                            break
+                        if len(text) > 50:
+                            clean_example = clean_patent_text(text[:MAX_TEXT_LENGTH_FOR_EXAMPLES])
+                            selected_examples.append(clean_example)
+                
+                examples[class_id] = selected_examples[:num_examples_per_class]
             
         return examples
         
     except Exception as e:
         print(f"Error loading few-shot examples: {e}")
         return {}
+
+
+def is_generic_example(text):
+    """Check if patent text is too generic or uninformative."""
+    generic_phrases = [
+        "a method for", "a system for", "a device for", "an apparatus for",
+        "the present invention", "according to the invention", "various embodiments"
+    ]
+    
+    text_lower = text.lower()
+    generic_count = sum(1 for phrase in generic_phrases if phrase in text_lower)
+    
+    # If more than 2 generic phrases, or text is very repetitive, consider it generic
+    return generic_count > 2 or len(set(text.split())) / len(text.split()) < 0.6
+
+
+def clean_patent_text(text):
+    """Clean patent text for better few-shot examples."""
+    # Remove excessive whitespace
+    text = ' '.join(text.split())
+    
+    # Remove figure references that aren't helpful
+    import re
+    text = re.sub(r'\(Fig\.\s*\d+[a-z]?\)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\(FIG\.\s*\d+[a-z]?\)', '', text, flags=re.IGNORECASE)
+    
+    # Remove excessive parenthetical numbers
+    text = re.sub(r'\(\d{2,}\)', '', text)
+    
+    # Clean up spacing
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
 
 
 def load_patent_dataset(num_samples=DEFAULT_TOTAL_SAMPLES):
@@ -260,41 +320,114 @@ def load_patent_dataset(num_samples=DEFAULT_TOTAL_SAMPLES):
 
 
 def create_few_shot_prompt(text_to_classify, few_shot_examples):
-    """Create a few-shot prompt for patent classification."""
+    """Create an improved few-shot prompt for patent classification."""
     
-    # Create the prompt with examples
-    prompt = "Classify the following patent text into one of these categories:\n\n"
+    prompt = """You are a patent classification expert. Your task is to classify patent texts into one of 9 specific categories.
+
+CLASSIFICATION CATEGORIES:
+0: Human Necessities (food, clothing, shelter, health, recreation)
+1: Performing Operations; Transporting (machines, engines, transportation)
+2: Chemistry; Metallurgy (chemical processes, materials, compounds)
+3: Textiles; Paper (fabrics, fibers, paper manufacturing)
+4: Fixed Constructions (buildings, structures, construction)
+5: Mechanical Engineering; Lightning; Heating; Weapons; Blasting (mechanical systems, lighting, heating)
+6: Physics (instruments, optics, electronics, measurements)
+7: Electricity (electrical devices, circuits, power systems)
+8: General tagging of new or cross-sectional technology (emerging/cross-cutting technologies)
+
+INSTRUCTIONS: 
+- Read the patent text carefully
+- Identify the main technical domain and application
+- Choose the most appropriate category (0-8)
+- Respond with only the number (0, 1, 2, 3, 4, 5, 6, 7, or 8)
+
+EXAMPLES:
+"""
     
-    # Add class descriptions
-    for class_id, class_name in PATENT_CLASSES.items():
-        prompt += f"{class_id}: {class_name}\n"
+    # Add few-shot examples in a cleaner format
+    for class_id in sorted(few_shot_examples.keys()):
+        if class_id in few_shot_examples:
+            for example in few_shot_examples[class_id]:
+                # Clean up the example text
+                clean_example = example[:MAX_TEXT_LENGTH_FOR_EXAMPLES].strip()
+                if not clean_example.endswith('.'):
+                    clean_example += "..."
+                prompt += f"\nText: {clean_example}\nAnswer: {class_id}\n"
     
-    prompt += "\nHere are some examples:\n\n"
+    # Add the text to classify with clear formatting
+    clean_text = text_to_classify[:MAX_TEXT_LENGTH_FOR_CLASSIFICATION].strip()
+    if not clean_text.endswith('.'):
+        clean_text += "..."
     
-    # Add few-shot examples
-    for class_id, examples in few_shot_examples.items():
-        class_name = PATENT_CLASSES[class_id]
-        for example in examples:
-            prompt += f"Text: {example[:MAX_TEXT_LENGTH_FOR_EXAMPLES]}...\nClass: {class_id} ({class_name})\n\n"
-    
-    # Add the text to classify
-    prompt += f"Now classify this text:\nText: {text_to_classify[:MAX_TEXT_LENGTH_FOR_CLASSIFICATION]}...\nClass:"
+    prompt += f"""\nNow classify this patent text:
+
+Text: {clean_text}
+Answer:"""
     
     return prompt
 
 
 def extract_prediction_from_response(response_text):
-    """Extract class prediction from model response."""
-    # Look for class numbers in the response
+    """Extract class prediction from model response with improved parsing."""
+    if not response_text:
+        return None
+        
+    response_clean = response_text.strip().lower()
+    
+    # Method 1: Look for standalone numbers (most reliable)
+    import re
+    number_matches = re.findall(r'\b([0-8])\b', response_text[:50])  # First 50 chars
+    if number_matches:
+        return int(number_matches[0])
+    
+    # Method 2: Look for "Answer: X" or "Class: X" patterns
+    answer_patterns = [
+        r'answer:\s*([0-8])',
+        r'class:\s*([0-8])',
+        r'category:\s*([0-8])',
+        r'classification:\s*([0-8])'
+    ]
+    
+    for pattern in answer_patterns:
+        matches = re.findall(pattern, response_clean)
+        if matches:
+            return int(matches[0])
+    
+    # Method 3: Look for any digit 0-8 in first part of response
     for i in range(NUM_PATENT_CLASSES):
-        if str(i) in response_text[:RESPONSE_PARSE_WINDOW]:
+        if str(i) in response_text[:20]:  # Look in first 20 chars
+            # Make sure it's not part of a larger number
+            char_before = response_text[:20].find(str(i))
+            if char_before > 0:
+                prev_char = response_text[char_before - 1]
+                if prev_char.isdigit():
+                    continue
+            
+            char_after_idx = char_before + 1
+            if char_after_idx < len(response_text[:20]):
+                next_char = response_text[char_after_idx]
+                if next_char.isdigit():
+                    continue
+                    
             return i
     
-    # Fallback: look for class names
-    response_lower = response_text.lower()
-    for class_id, class_name in PATENT_CLASSES.items():
-        if class_name.lower()[:20] in response_lower:
-            return class_id
+    # Method 4: Look for class name keywords
+    class_keywords = {
+        0: ['human', 'necessities', 'food', 'health', 'clothing'],
+        1: ['operations', 'transport', 'machines', 'engines'],
+        2: ['chemistry', 'metallurgy', 'chemical', 'compounds'],
+        3: ['textiles', 'paper', 'fabrics', 'fibers'],
+        4: ['constructions', 'buildings', 'structures'],
+        5: ['mechanical', 'engineering', 'heating', 'lighting'],
+        6: ['physics', 'instruments', 'optics', 'electronics'],
+        7: ['electricity', 'electrical', 'circuits', 'power'],
+        8: ['general', 'cross-sectional', 'emerging']
+    }
+    
+    for class_id, keywords in class_keywords.items():
+        for keyword in keywords:
+            if keyword in response_clean[:100]:  # First 100 chars
+                return class_id
     
     return None  # Could not extract prediction
 
