@@ -104,7 +104,7 @@ MAX_TOKENS = 5
 
 
 
-## Optimization Features Implemented
+## Changes and/or optimizations
 
 1. Larger sample size from before 
 
@@ -120,6 +120,8 @@ MAX_TOKENS = 5
 - Background Processing: Non-blocking inference for improved throughput
 
 5. Per-class evaluations
+
+6. Pooling
 
 #### Top Performing Classes (F1 > 0.5)
 1. **Chemistry; Metallurgy** (Class 2): F1 = 0.586
