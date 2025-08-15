@@ -23,3 +23,4 @@
 - Produces comprehensive report with accuracy, precision, recall, F1 per class
 - Identifies optimal few-shot configuration and problematic classes
 - Includes confusion matrices and performance vs speed tradeoffs
+- always include usage instructions in the file itself for all new files
