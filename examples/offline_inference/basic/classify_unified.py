@@ -54,6 +54,15 @@ Ultimate experiment (all optimizations):
 Use Llama instead of default Phi-3:
     python examples/offline_inference/basic/classify_unified.py --model ./examples/offline_inference/basic/model_cache/llama-3.1-8b --experiment --enhanced-prompts
 
+TF-IDF + vLLM Ensemble (best accuracy):
+    python examples/offline_inference/basic/classify_unified.py --experiment --use-tfidf-ensemble --enhanced-prompts
+
+TF-IDF only (fast baseline):
+    python examples/offline_inference/basic/classify_unified.py --experiment --tfidf-only
+
+Train new TF-IDF model:
+    python examples/offline_inference/basic/classify_unified.py --train-tfidf --tfidf-model-path ./my_tfidf.pkl
+
 Ray distributed processing (multi-GPU/multi-node):
     python examples/offline_inference/basic/classify_unified.py --experiment --ray-distributed --num-ray-workers 4 --enhanced-prompts --vllm-optimizations
 
@@ -81,6 +90,12 @@ vLLM Optimizations:
 --use-logit-bias: Bias toward classification tokens (0-8) for better accuracy
 --kv-cache-optimization: Optimize KV cache usage with consistent prompt prefixes
 --custom-batch-size N: Override default batch size
+
+TF-IDF Ensemble Options:
+--use-tfidf-ensemble: Enable TF-IDF + vLLM ensemble for best accuracy
+--tfidf-only: Use only TF-IDF baseline (fast, ~40% accuracy)
+--train-tfidf: Train new TF-IDF model from dataset
+--tfidf-model-path PATH: Path to save/load TF-IDF model
 
 Parallelism Options:
 --ray-distributed: Use Ray distributed processing across multiple workers/nodes
@@ -173,6 +188,19 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
+# TF-IDF ensemble imports with fallbacks
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.model_selection import cross_val_score
+    from sklearn.metrics import accuracy_score
+    import joblib
+    TFIDF_AVAILABLE = True
+except ImportError:
+    TFIDF_AVAILABLE = False
+    print("Info: scikit-learn not available. TF-IDF ensemble disabled. Install with: pip install scikit-learn")
+
 # Patent classification classes
 PATENT_CLASSES = {
     0: "Human Necessities",
@@ -260,6 +288,35 @@ CLASSIFICATION_TEMPERATURE = 0.0
 MAX_CLASSIFICATION_TOKENS = 5
 CONFIDENCE_LEVEL = 0.95
 RANDOM_SEED = 42
+
+# TF-IDF ensemble configuration constants
+TFIDF_MAX_FEATURES = 10000          # TF-IDF vocabulary size for efficiency
+TFIDF_MIN_DF = 2                    # Minimum document frequency
+TFIDF_MAX_DF = 0.8                  # Maximum document frequency (remove common words)
+TFIDF_NGRAM_RANGE = (1, 2)          # Unigrams and bigrams
+TFIDF_HIGH_CONFIDENCE = 0.8         # When to trust TF-IDF alone
+TFIDF_LOW_CONFIDENCE = 0.6          # When to definitely use vLLM
+VLLM_HIGH_CONFIDENCE = 0.9          # When to trust vLLM alone
+ENSEMBLE_MIN_AGREEMENT = 0.7        # Minimum agreement for ensemble voting
+
+# Hierarchical classification constants (TF-IDF domain → vLLM class)
+DOMAIN_CONFIDENCE_THRESHOLD = 0.6  # Minimum TF-IDF confidence to use domain pre-filtering
+HIERARCHICAL_CONFIDENCE_BOOST = 0.1 # Confidence boost for successful hierarchical classification
+
+# Domain group mappings for hierarchical classification
+DOMAIN_TO_CLASSES = {
+    "chemistry_materials": [2, 3],      # Chemistry/Metallurgy, Textiles/Paper  
+    "engineering_mechanical": [1, 4, 5], # Operations, Construction, Mechanical
+    "electronics_physics": [6, 7],      # Physics, Electricity
+    "life_sciences": [0],               # Human Necessities
+    "cross_cutting": [8]                # General Technology
+}
+
+# Reverse mapping: class → domain
+CLASS_TO_DOMAIN = {}
+for domain, classes in DOMAIN_TO_CLASSES.items():
+    for cls in classes:
+        CLASS_TO_DOMAIN[cls] = domain
 
 # vLLM specific parameters
 # Optimal batch size for most GPUs - balances memory usage and throughput
@@ -356,6 +413,18 @@ def parse_unified_args():
     parser.add_argument("--custom-batch-size", type=int,
                        help="Custom batch size override")
     
+    # TF-IDF ensemble flags
+    parser.add_argument("--use-tfidf-ensemble", action="store_true",
+                       help="Enable TF-IDF + vLLM ensemble classification")
+    parser.add_argument("--train-tfidf", action="store_true",
+                       help="Train TF-IDF baseline model from dataset")
+    parser.add_argument("--tfidf-model-path", type=str, default="./examples/offline_inference/basic/tfidf_model/tfidf_baseline.pkl",
+                       help="Path to save/load TF-IDF model")
+    parser.add_argument("--tfidf-only", action="store_true",
+                       help="Use only TF-IDF baseline (no vLLM)")
+    parser.add_argument("--hierarchical-classification", action="store_true",
+                       help="Use TF-IDF for domain pre-filtering, then vLLM for class")
+    
     # Ray distributed processing flags
     parser.add_argument("--ray-distributed", action="store_true",
                        help="Enable Ray distributed processing for large workloads")
@@ -410,6 +479,21 @@ class UnifiedPatentClassifier:
         self.use_kv_cache_optimization = args.kv_cache_optimization and args.vllm_optimizations
         self.use_ray_distributed = args.ray_distributed
         
+        # TF-IDF ensemble configuration
+        self.use_tfidf_ensemble = args.use_tfidf_ensemble and TFIDF_AVAILABLE
+        self.train_tfidf = args.train_tfidf and TFIDF_AVAILABLE
+        self.tfidf_model_path = args.tfidf_model_path
+        self.tfidf_only = args.tfidf_only and TFIDF_AVAILABLE
+        self.hierarchical_classification = args.hierarchical_classification and TFIDF_AVAILABLE
+        self.tfidf_model = None
+        self.domain_tfidf_model = None  # Separate model for domain classification
+        
+        if self.use_tfidf_ensemble or self.tfidf_only:
+            if not TFIDF_AVAILABLE:
+                print("❌ TF-IDF ensemble requires scikit-learn. Install with: pip install scikit-learn")
+                self.use_tfidf_ensemble = False
+                self.tfidf_only = False
+        
         # Ray configuration
         if self.use_ray_distributed:
             self.num_ray_workers = args.num_ray_workers
@@ -435,6 +519,11 @@ class UnifiedPatentClassifier:
         print(f"   Optimal batching: {self.use_optimal_batching}")
         print(f"   Parallel sampling: {self.use_parallel_sampling}")
         print(f"   Ray distributed: {self.use_ray_distributed}")
+        print(f"   TF-IDF ensemble: {self.use_tfidf_ensemble}")
+        print(f"   TF-IDF only: {self.tfidf_only}")
+        print(f"   Hierarchical classification: {self.hierarchical_classification}")
+        if self.train_tfidf:
+            print(f"   TF-IDF training: enabled")
         if self.tensor_parallel_size > 1 or self.pipeline_parallel_size > 1:
             print(f"   Tensor parallel size: {self.tensor_parallel_size}")
             print(f"   Pipeline parallel size: {self.pipeline_parallel_size}")
@@ -476,6 +565,19 @@ class UnifiedPatentClassifier:
         
     def initialize_engine(self):
         """Initialize vLLM engine with appropriate configuration."""
+        # Initialize TF-IDF system first if needed for hierarchical classification
+        if self.hierarchical_classification:
+            print("🌳 Pre-initializing TF-IDF system for hierarchical classification...")
+            self.initialize_tfidf_system()
+        
+        # Skip vLLM initialization if using TF-IDF only
+        if self.tfidf_only:
+            print("🎯 Skipping vLLM engine - using TF-IDF only mode")
+            # Still need TF-IDF system for TF-IDF only mode
+            if not self.hierarchical_classification:  # Don't initialize twice
+                self.initialize_tfidf_system()
+            return
+            
         print("🚀 Initializing vLLM engine...")
         
         # Filter engine arguments - exclude custom classification args but keep vLLM engine args
@@ -485,7 +587,8 @@ class UnifiedPatentClassifier:
             'vllm_optimizations', 'optimal_batching', 'parallel_sampling', 
             'use_logit_bias', 'kv_cache_optimization', 'custom_batch_size',
             'ray_distributed', 'num_ray_workers', 'ray_address', 
-            'ray_worker_batch_size', 'ray_max_concurrent'
+            'ray_worker_batch_size', 'ray_max_concurrent',
+            'use_tfidf_ensemble', 'train_tfidf', 'tfidf_model_path', 'tfidf_only', 'hierarchical_classification'
         ]
         
         engine_args = {
@@ -538,6 +641,10 @@ class UnifiedPatentClassifier:
         
         print(f"✅ Engine initialized with model: {self.args.model}")
         
+        # Initialize TF-IDF system if enabled (skip if already initialized for hierarchical classification)
+        if (self.use_tfidf_ensemble or self.tfidf_only) and not self.hierarchical_classification:
+            self.initialize_tfidf_system()
+        
     def _initialize_class_token_ids(self):
         """Initialize token IDs for class numbers."""
         try:
@@ -549,6 +656,368 @@ class UnifiedPatentClassifier:
         except Exception as e:
             print(f"⚠️  Could not initialize class token IDs: {e}")
             self.use_logit_bias = False
+    
+    def initialize_tfidf_system(self):
+        """Initialize TF-IDF baseline classifier."""
+        if not TFIDF_AVAILABLE:
+            print("❌ TF-IDF system requires scikit-learn")
+            return
+        
+        print("🎯 Initializing TF-IDF classification system...")
+        
+        if self.train_tfidf:
+            print("🏗️  Training new TF-IDF baseline...")
+            self.train_tfidf_baseline()
+        else:
+            # Try to load existing model
+            if Path(self.tfidf_model_path).exists():
+                print(f"📂 Loading TF-IDF model: {self.tfidf_model_path}")
+                self.load_tfidf_model()
+            else:
+                print(f"⚠️  TF-IDF model not found: {self.tfidf_model_path}")
+                print("🏗️  Training new TF-IDF baseline...")
+                self.train_tfidf_baseline()
+        
+        # Load domain classifier for hierarchical classification
+        if self.hierarchical_classification and self.tfidf_model is not None:
+            print("🌳 Loading domain classifier for hierarchical classification...")
+            if not self.load_domain_classifier():
+                print("🏗️  Training domain classifier...")
+                self.train_domain_classifier()
+    
+    def preprocess_text_for_tfidf(self, text: str) -> str:
+        """Preprocess patent text for TF-IDF."""
+        text = text.lower().strip()
+        
+        # Remove figure references and numeric noise
+        import re
+        text = re.sub(r'\bfig\w*\.?\s*\d+\w*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\d+', 'NUMBER', text)  # Replace numbers with token
+        text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+        
+        return text
+    
+    def train_tfidf_baseline(self):
+        """Train TF-IDF baseline classifier."""
+        if not TFIDF_AVAILABLE:
+            raise ImportError("scikit-learn required for TF-IDF training")
+        
+        print("🚀 Training TF-IDF baseline classifier...")
+        start_time = time.time()
+        
+        # Load dataset
+        if not DATASETS_AVAILABLE:
+            raise ImportError("datasets library required for training")
+        
+        dataset = load_dataset("ccdv/patent-classification", split="train")
+        texts = list(dataset['text'])
+        labels = list(dataset['label'])
+        
+        print(f"📊 Training on {len(texts):,} patent samples")
+        
+        # Preprocess texts
+        processed_texts = [self.preprocess_text_for_tfidf(text) for text in texts]
+        
+        # Create and train pipeline
+        self.tfidf_model = Pipeline([
+            ('tfidf', TfidfVectorizer(
+                max_features=TFIDF_MAX_FEATURES,
+                min_df=TFIDF_MIN_DF,
+                max_df=TFIDF_MAX_DF,
+                ngram_range=TFIDF_NGRAM_RANGE,
+                stop_words='english',
+                lowercase=True,
+                strip_accents='unicode'
+            )),
+            ('classifier', LogisticRegression(
+                max_iter=1000,
+                class_weight='balanced',
+                random_state=RANDOM_SEED
+            ))
+        ])
+        
+        # Train the pipeline
+        self.tfidf_model.fit(processed_texts, labels)
+        
+        training_time = time.time() - start_time
+        
+        # Cross-validation evaluation
+        cv_scores = cross_val_score(self.tfidf_model, processed_texts, labels, cv=5, scoring='accuracy')
+        
+        print(f"✅ TF-IDF training completed in {training_time:.1f}s")
+        print(f"📊 Cross-validation accuracy: {cv_scores.mean():.3f} ± {cv_scores.std():.3f}")
+        print(f"📝 Vocabulary size: {len(self.tfidf_model['tfidf'].vocabulary_):,} features")
+        
+        # Save trained model
+        self.save_tfidf_model()
+        
+        # If hierarchical classification is enabled, also train domain classifier
+        if self.hierarchical_classification:
+            print("🌳 Training domain classifier for hierarchical classification...")
+            self.train_domain_classifier(processed_texts, labels)
+    
+    def save_tfidf_model(self):
+        """Save trained TF-IDF model."""
+        if self.tfidf_model is None:
+            print("⚠️  No TF-IDF model to save")
+            return
+        
+        model_data = {
+            'pipeline': self.tfidf_model,
+            'timestamp': datetime.now().isoformat(),
+            'vocabulary_size': len(self.tfidf_model['tfidf'].vocabulary_),
+        }
+        
+        with open(self.tfidf_model_path, 'wb') as f:
+            joblib.dump(model_data, f)
+        
+        print(f"💾 TF-IDF model saved to: {self.tfidf_model_path}")
+    
+    def load_tfidf_model(self):
+        """Load trained TF-IDF model."""
+        try:
+            with open(self.tfidf_model_path, 'rb') as f:
+                model_data = joblib.load(f)
+            
+            self.tfidf_model = model_data['pipeline']
+            vocab_size = model_data.get('vocabulary_size', 'unknown')
+            
+            print(f"✅ TF-IDF model loaded (vocabulary: {vocab_size} features)")
+            
+        except Exception as e:
+            print(f"❌ Failed to load TF-IDF model: {e}")
+            print("🏗️  Training new model instead...")
+            self.train_tfidf_baseline()
+    
+    def predict_with_tfidf(self, text: str) -> Tuple[int, float]:
+        """Make prediction using TF-IDF baseline."""
+        if self.tfidf_model is None:
+            raise ValueError("TF-IDF model not initialized")
+        
+        # Preprocess text
+        processed_text = self.preprocess_text_for_tfidf(text)
+        
+        # Get prediction and probabilities
+        prediction = self.tfidf_model.predict([processed_text])[0]
+        probabilities = self.tfidf_model.predict_proba([processed_text])[0]
+        confidence = np.max(probabilities)
+        
+        return int(prediction), float(confidence)
+    
+    def predict_with_ensemble(self, text: str, few_shot_examples: List = None) -> Tuple[int, float, str]:
+        """Make ensemble prediction combining TF-IDF and vLLM."""
+        start_time = time.time()
+        
+        # Get TF-IDF prediction (fast)
+        tfidf_pred, tfidf_conf = self.predict_with_tfidf(text)
+        
+        # Decision logic based on TF-IDF confidence
+        if tfidf_conf >= TFIDF_HIGH_CONFIDENCE:
+            # TF-IDF is very confident - use it directly (fast path)
+            method = "tfidf_confident"
+            return tfidf_pred, tfidf_conf, method
+        
+        else:
+            # Get vLLM prediction (slow but accurate)
+            vllm_prompt = self.create_prompt(text, few_shot_examples or [])
+            vllm_outputs = self.process_batch([vllm_prompt])
+            vllm_preds, vllm_confs = self.extract_predictions(vllm_outputs)
+            
+            if len(vllm_preds) > 0 and vllm_preds[0] is not None:
+                vllm_pred, vllm_conf = vllm_preds[0], vllm_confs[0]
+                
+                # Ensemble decision logic
+                if vllm_conf >= VLLM_HIGH_CONFIDENCE:
+                    # vLLM is very confident - use it
+                    method = "vllm_confident"
+                    return vllm_pred, vllm_conf, method
+                    
+                elif tfidf_pred == vllm_pred:
+                    # Both models agree - increase confidence
+                    method = "ensemble_agreement"
+                    ensemble_conf = min(0.95, (tfidf_conf + vllm_conf) / 2 + 0.1)  # Bonus for agreement
+                    return tfidf_pred, ensemble_conf, method
+                    
+                else:
+                    # Models disagree - use confidence-weighted decision
+                    if vllm_conf > tfidf_conf + 0.1:  # vLLM significantly more confident
+                        method = "vllm_higher_conf"
+                        return vllm_pred, vllm_conf, method
+                    elif tfidf_conf > vllm_conf + 0.1:  # TF-IDF more confident
+                        method = "tfidf_higher_conf"
+                        return tfidf_pred, tfidf_conf, method
+                    else:
+                        # Close confidence - prefer vLLM (usually more accurate)
+                        method = "vllm_tiebreaker"
+                        return vllm_pred, vllm_conf * 0.9, method  # Slight penalty for disagreement
+            else:
+                # vLLM failed - fallback to TF-IDF
+                method = "tfidf_fallback"
+                return tfidf_pred, tfidf_conf * 0.8, method  # Penalty for fallback
+    
+    def train_domain_classifier(self, processed_texts: List[str], labels: List[int]):
+        """Train separate TF-IDF classifier for domain prediction."""
+        # Convert class labels to domain labels
+        domain_labels = [CLASS_TO_DOMAIN[label] for label in labels]
+        
+        # Create domain classifier
+        self.domain_tfidf_model = Pipeline([
+            ('tfidf', TfidfVectorizer(
+                max_features=TFIDF_MAX_FEATURES,
+                min_df=TFIDF_MIN_DF,
+                max_df=TFIDF_MAX_DF,
+                ngram_range=TFIDF_NGRAM_RANGE,
+                stop_words='english',
+                lowercase=True,
+                strip_accents='unicode'
+            )),
+            ('classifier', LogisticRegression(
+                max_iter=1000,
+                class_weight='balanced',
+                random_state=RANDOM_SEED
+            ))
+        ])
+        
+        # Train domain classifier
+        self.domain_tfidf_model.fit(processed_texts, domain_labels)
+        
+        # Evaluate domain classifier
+        cv_scores = cross_val_score(self.domain_tfidf_model, processed_texts, domain_labels, cv=5, scoring='accuracy')
+        print(f"🌳 Domain classifier accuracy: {cv_scores.mean():.3f} ± {cv_scores.std():.3f}")
+        
+        # Save domain classifier
+        domain_model_path = self.tfidf_model_path.replace('.pkl', '_domain.pkl')
+        with open(domain_model_path, 'wb') as f:
+            joblib.dump({'pipeline': self.domain_tfidf_model}, f)
+        print(f"💾 Domain classifier saved to: {domain_model_path}")
+    
+    def load_domain_classifier(self):
+        """Load domain classifier if available."""
+        domain_model_path = self.tfidf_model_path.replace('.pkl', '_domain.pkl')
+        if os.path.exists(domain_model_path):
+            try:
+                with open(domain_model_path, 'rb') as f:
+                    domain_data = joblib.load(f)
+                    self.domain_tfidf_model = domain_data['pipeline']
+                print(f"🌳 Domain classifier loaded from: {domain_model_path}")
+                return True
+            except Exception as e:
+                print(f"⚠️ Failed to load domain classifier: {e}")
+                return False
+        else:
+            print(f"⚠️ Domain classifier not found at: {domain_model_path}")
+            return False
+    
+    def predict_domain(self, text: str) -> Tuple[str, float]:
+        """Predict domain using domain classifier."""
+        if self.domain_tfidf_model is None:
+            raise ValueError("Domain classifier not initialized")
+        
+        processed_text = self.preprocess_text_for_tfidf(text)
+        prediction = self.domain_tfidf_model.predict([processed_text])[0]
+        probabilities = self.domain_tfidf_model.predict_proba([processed_text])[0]
+        confidence = np.max(probabilities)
+        
+        return prediction, float(confidence)
+    
+    def predict_with_hierarchical_classification(self, text: str, few_shot_examples: List = None) -> Tuple[int, float, str]:
+        """Hierarchical classification: TF-IDF domain → vLLM class."""
+        
+        # Step 1: TF-IDF domain prediction
+        domain, domain_confidence = self.predict_domain(text)
+        
+        # Step 2: Check if domain confidence is high enough
+        if domain_confidence < DOMAIN_CONFIDENCE_THRESHOLD:
+            # Low domain confidence - fallback to full vLLM classification
+            vllm_prompt = self.create_prompt(text, few_shot_examples or [])
+            vllm_outputs = self.process_batch([vllm_prompt])
+            vllm_preds, vllm_confs = self.extract_predictions(vllm_outputs)
+            
+            if len(vllm_preds) > 0 and vllm_preds[0] is not None:
+                return vllm_preds[0], vllm_confs[0], f"full_vllm_fallback"
+            else:
+                # Both failed - use TF-IDF as last resort
+                tfidf_pred, tfidf_conf = self.predict_with_tfidf(text)
+                return tfidf_pred, tfidf_conf * 0.7, "tfidf_last_resort"
+        
+        # Step 3: Get domain-specific classes
+        domain_classes = DOMAIN_TO_CLASSES[domain]
+        
+        if len(domain_classes) == 1:
+            # Single class domain - no need for vLLM
+            method = f"single_class_{domain}"
+            confidence = domain_confidence + HIERARCHICAL_CONFIDENCE_BOOST
+            return domain_classes[0], min(0.95, confidence), method
+        
+        # Step 4: Create focused vLLM prompt for domain classes only
+        domain_class_names = {cls: PATENT_CLASSES[cls] for cls in domain_classes}
+        focused_few_shot = {}
+        
+        # Get few-shot examples only for domain classes
+        if few_shot_examples:
+            for cls in domain_classes:
+                if cls in few_shot_examples:
+                    focused_few_shot[cls] = few_shot_examples[cls]
+        
+        # Create focused prompt
+        focused_prompt = self.create_focused_prompt(text, focused_few_shot, domain_class_names)
+        
+        # Step 5: vLLM prediction on focused classes
+        vllm_outputs = self.process_batch([focused_prompt])
+        vllm_preds, vllm_confs = self.extract_predictions(vllm_outputs)
+        
+        if len(vllm_preds) > 0 and vllm_preds[0] is not None:
+            vllm_pred = vllm_preds[0]
+            vllm_conf = vllm_confs[0]
+            
+            # Verify prediction is in expected domain
+            if vllm_pred in domain_classes:
+                # Success! Boost confidence for correct domain
+                boosted_confidence = min(0.95, vllm_conf + HIERARCHICAL_CONFIDENCE_BOOST)
+                method = f"hierarchical_{domain}"
+                return vllm_pred, boosted_confidence, method
+            else:
+                # vLLM predicted outside domain - trust domain classifier
+                best_class = domain_classes[0]  # Default to first class in domain
+                method = f"domain_override_{domain}"
+                return best_class, domain_confidence, method
+        else:
+            # vLLM failed - use first class in domain
+            method = f"domain_fallback_{domain}"  
+            return domain_classes[0], domain_confidence * 0.8, method
+    
+    def create_focused_prompt(self, text: str, few_shot_examples: Dict, class_names: Dict[int, str]) -> str:
+        """Create focused prompt with only relevant classes."""
+        clean_text = text[:ENHANCED_MAX_TEXT_LENGTH_FOR_CLASSIFICATION if self.use_enhanced_prompts else MAX_TEXT_LENGTH_FOR_CLASSIFICATION]
+        
+        if self.use_enhanced_prompts:
+            # Enhanced prompt with focused classes
+            class_descriptions = "\n".join([f"{cls}: {name}" for cls, name in class_names.items()])
+            
+            prompt = f"""You are an expert patent classifier. Classify this patent text into one of these specific categories:
+
+{class_descriptions}
+
+"""
+            
+            # Add few-shot examples for focused classes only
+            if few_shot_examples:
+                prompt += "Here are some examples:\n\n"
+                for class_id, examples in few_shot_examples.items():
+                    if class_id in class_names:
+                        class_name = class_names[class_id]
+                        for example in examples[:2]:  # Fewer examples for speed
+                            example_text = example[:ENHANCED_MAX_TEXT_LENGTH_FOR_EXAMPLES]
+                            prompt += f"Text: {example_text}\nClass: {class_id}\n\n"
+            
+            prompt += f"Now classify this patent text:\n\nText: {clean_text}\nClass:"
+            
+        else:
+            # Simple prompt
+            class_list = ", ".join([f"{cls}: {name}" for cls, name in class_names.items()])
+            prompt = f"Classify this patent into one of: {class_list}\n\nText: {clean_text}\nAnswer:"
+        
+        return prompt
     
     def create_sampling_params(self):
         """Create sampling parameters based on active optimizations."""
@@ -1490,21 +1959,51 @@ def run_unified_experiment(args):
         for class_id, examples in few_shot_examples.items():
             few_shot_subset[class_id] = examples[:few_shot_count] if len(examples) >= few_shot_count else examples
         
-        # Generate prompts
-        prompts = []
-        for text in texts:
-            prompt = classifier.create_prompt(text, few_shot_subset)
-            prompts.append(prompt)
-        
-        # Run classification (Ray distributed or regular)
-        print(f"Running few-shot classification with {len(prompts)} prompts...")
-        if classifier.use_ray_distributed:
-            outputs = classifier.process_with_ray_distributed(prompts, few_shot_count)
+        # Choose classification method
+        if classifier.tfidf_only:
+            # TF-IDF only mode
+            print(f"Running TF-IDF-only classification on {len(texts)} texts...")
+            predictions = []
+            confidences = []
+            methods = []
+            for text in texts:
+                pred, conf = classifier.predict_with_tfidf(text)
+                predictions.append(pred)
+                confidences.append(conf)
+                methods.append("tfidf_only")
+                
+        elif classifier.hierarchical_classification:
+            # Hierarchical classification mode (TF-IDF domain → vLLM class)
+            print(f"Running hierarchical classification on {len(texts)} texts...")
+            predictions = []
+            confidences = []
+            methods = []
+            for i, text in enumerate(texts):
+                if i % 50 == 0:  # Progress indicator
+                    print(f"   Progress: {i}/{len(texts)} ({i/len(texts)*100:.1f}%)")
+                
+                pred, conf, method = classifier.predict_with_hierarchical_classification(text, few_shot_subset)
+                predictions.append(pred)
+                confidences.append(conf)
+                methods.append(method)
+                
         else:
-            outputs = classifier.process_batch(prompts)
-        
-        # Extract predictions
-        predictions, confidences = classifier.extract_predictions(outputs)
+            # Standard vLLM classification
+            # Generate prompts
+            prompts = []
+            for text in texts:
+                prompt = classifier.create_prompt(text, few_shot_subset)
+                prompts.append(prompt)
+            
+            # Run classification (Ray distributed or regular)
+            print(f"Running few-shot classification with {len(prompts)} prompts...")
+            if classifier.use_ray_distributed:
+                outputs = classifier.process_with_ray_distributed(prompts, few_shot_count)
+            else:
+                outputs = classifier.process_batch(prompts)
+            
+            # Extract predictions
+            predictions, confidences = classifier.extract_predictions(outputs)
         
         # Filter valid predictions
         if classifier.use_confidence_scoring:
@@ -1590,22 +2089,51 @@ def main(args: Namespace):
     texts, true_labels = load_patent_dataset_unified(args)
     few_shot_examples = load_few_shot_examples_unified(args)
     
-    # Create prompts
-    prompts = []
-    for text in texts:
-        prompt = classifier.create_prompt(text, few_shot_examples)
-        prompts.append(prompt)
-    
-    # Process (Ray distributed or regular)
+    # Choose classification method
     start_time = time.time()
-    if classifier.use_ray_distributed:
-        outputs = classifier.process_with_ray_distributed(prompts)
+    if classifier.tfidf_only:
+        # TF-IDF only mode
+        print("Using TF-IDF-only classification...")
+        predictions = []
+        confidences = []
+        for text in texts:
+            pred, conf = classifier.predict_with_tfidf(text)
+            predictions.append(pred)
+            confidences.append(conf)
+            
+    elif classifier.hierarchical_classification:
+        # Hierarchical classification mode (TF-IDF domain → vLLM class)
+        print("Using hierarchical classification (TF-IDF domain → vLLM class)...")
+        predictions = []
+        confidences = []
+        methods = []
+        for i, text in enumerate(texts):
+            if i % 10 == 0:  # Progress indicator for single run
+                print(f"   Progress: {i}/{len(texts)} ({i/len(texts)*100:.1f}%)")
+            
+            pred, conf, method = classifier.predict_with_hierarchical_classification(text, few_shot_examples)
+            predictions.append(pred)
+            confidences.append(conf)
+            methods.append(method)
     else:
-        outputs = classifier.process_batch(prompts)
-    processing_time = time.time() - start_time
+        # Standard vLLM classification
+        # Create prompts
+        prompts = []
+        for text in texts:
+            prompt = classifier.create_prompt(text, few_shot_examples)
+            prompts.append(prompt)
+        
+        # Process (Ray distributed or regular)
+        print("Using standard vLLM classification...")
+        if classifier.use_ray_distributed:
+            outputs = classifier.process_with_ray_distributed(prompts)
+        else:
+            outputs = classifier.process_batch(prompts)
+        
+        # Extract and evaluate
+        predictions, confidences = classifier.extract_predictions(outputs)
     
-    # Extract and evaluate
-    predictions, confidences = classifier.extract_predictions(outputs)
+    processing_time = time.time() - start_time
     
     # Filter predictions
     if classifier.use_confidence_scoring:
