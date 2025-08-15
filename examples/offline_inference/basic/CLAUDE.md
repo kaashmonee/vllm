@@ -41,11 +41,21 @@ python examples/offline_inference/basic/classify_unified.py --experiment --ray-d
 
 # Compare models
 python examples/offline_inference/basic/classify_unified.py --model ./model_cache/llama-3.1-8b --experiment --enhanced-prompts
+
+# Multi-LoRA Adapter Classification (domain-specific fine-tuning)
+python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --enhanced-prompts
+
+# Single domain LoRA adapter
+python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-domain chemical_materials
+
+# LoRA ensemble mode (confidence-weighted voting)
+python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-ensemble-mode --enhanced-prompts
 ```
 
 **Features:**
 - **Algorithmic Enhancements**: Enhanced prompts, advanced sampling, chain-of-thought, confidence scoring
 - **vLLM Optimizations**: Optimal batching, parallel sampling, logit bias, KV cache optimization
+- **Multi-LoRA Adapters**: Domain-specific fine-tuned adapters for specialized classification
 - **Text Pooling**: Automatic segmentation and pooling of long patent texts (mean, max, attention-weighted strategies)
 - **Tensor Parallelism**: Split single model across multiple GPUs for memory efficiency
 - **Pipeline Parallelism**: Split model layers across GPUs for deeper models
@@ -89,6 +99,50 @@ python visualize_results.py my_results.json --analysis-only
 - Class distribution visualization
 - Detailed recommendations for improvement
 
+#### 4. **train_lora_adapters.py** (LoRA Adapter Training)
+Train domain-specific LoRA adapters for improved patent classification:
+
+```bash
+# Train all domain adapters (run once, takes several hours)
+python examples/offline_inference/basic/train_lora_adapters.py --train-all-domains
+
+# Train specific domain adapter
+python examples/offline_inference/basic/train_lora_adapters.py --domain chemical_materials --output-dir ./lora_adapters
+
+# Test mode (smaller dataset, faster training)
+python examples/offline_inference/basic/train_lora_adapters.py --domain electronics_physics --test-mode --max-samples 100
+
+# Custom output directory
+python examples/offline_inference/basic/train_lora_adapters.py --train-all-domains --output-dir ./custom_lora_adapters
+```
+
+**Domain Groups:**
+- **chemical_materials**: Chemistry/Metallurgy + Textiles/Paper (Classes 2,3)
+- **engineering_mechanical**: Operations/Transport + Construction + Mechanical (Classes 1,4,5)
+- **electronics_physics**: Physics + Electricity (Classes 6,7) 
+- **life_sciences**: Human Necessities (Class 0)
+- **emerging_crosscutting**: General/Cross-sectional Technology (Class 8)
+
+#### 5. **test_lora_system.py** (LoRA System Testing)
+Validate and test the multi-adapter LoRA system:
+
+```bash
+# Validate system setup and dependencies
+python examples/offline_inference/basic/test_lora_system.py --validate-system
+
+# Test basic LoRA functionality with sample patents
+python examples/offline_inference/basic/test_lora_system.py --test-basic
+
+# Test ensemble mode functionality
+python examples/offline_inference/basic/test_lora_system.py --test-ensemble --lora-adapter-dir ./lora_adapters
+
+# Test specific domain adapter
+python examples/offline_inference/basic/test_lora_system.py --test-domain chemical_materials
+
+# Complete system validation and testing
+python examples/offline_inference/basic/test_lora_system.py --validate-system --test-basic
+```
+
 ### Performance Expectations
 
 | Configuration | Throughput | Accuracy | Use Case |
@@ -99,6 +153,9 @@ python visualize_results.py my_results.json --analysis-only
 | **Tensor Parallel** | 120-250/sec | ~38-42% | Memory-efficient multi-GPU |
 | **Full Power** | 80-150/sec | ~45-55% | Best accuracy + good speed |
 | **Ray Distributed** | 200-800/sec | ~45-55% | Large-scale processing |
+| **LoRA Single-Adapter** | 15-30/sec | ~50-60% | Domain-specific fine-tuning |
+| **LoRA Multi-Adapter** | 10-20/sec | ~55-65% | Best accuracy with routing |
+| **LoRA Ensemble** | 5-15/sec | ~60-70% | Maximum accuracy with voting |
 
 ### Hardware Recommendations
 
@@ -180,6 +237,8 @@ python examples/offline_inference/basic/classify_unified.py --experiment --tenso
 - **For Llama models**: Accept license at https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct
 
 ### Quick Start Workflow
+
+#### Standard Classification Workflow
 ```bash
 # 1. Download model
 python examples/offline_inference/basic/download_model.py
@@ -192,4 +251,41 @@ python examples/offline_inference/basic/classify_unified.py --experiment --enhan
 
 # 4. Visualize results
 python visualize_results.py unified_classification_report.json
+```
+
+#### Multi-LoRA Adapter Workflow (Advanced)
+```bash
+# 1. Validate LoRA system setup
+python examples/offline_inference/basic/test_lora_system.py --validate-system
+
+# 2. Train domain-specific LoRA adapters (takes 2-4 hours per domain)
+python examples/offline_inference/basic/train_lora_adapters.py --train-all-domains
+
+# 3. Test LoRA system with sample patents
+python examples/offline_inference/basic/test_lora_system.py --test-basic
+
+# 4. Run classification with multi-adapter routing
+python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --enhanced-prompts
+
+# 5. Compare ensemble vs single-adapter modes
+python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-ensemble-mode
+
+# 6. Compare against baseline performance
+python examples/offline_inference/basic/classify_unified.py --experiment --enhanced-prompts  # Baseline
+```
+
+#### Domain-Specific Performance Improvement Workflow
+```bash
+# 1. Identify problematic domain from baseline results
+# (e.g., poor performance on Classes 6,7 = electronics_physics domain)
+
+# 2. Train specific domain adapter
+python examples/offline_inference/basic/train_lora_adapters.py --domain electronics_physics
+
+# 3. Test domain-specific adapter
+python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-domain electronics_physics
+
+# 4. Compare domain-specific vs general classification
+python examples/offline_inference/basic/classify_unified.py --experiment --enhanced-prompts  # General
+python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-domain electronics_physics  # Specialized
 ```
