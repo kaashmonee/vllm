@@ -244,7 +244,7 @@ DEFAULT_TOTAL_SAMPLES = DEFAULT_SAMPLES_PER_CLASS * NUM_PATENT_CLASSES
 # Experiment configuration
 EXPERIMENT_SAMPLES_PER_CLASS = 200
 EXPERIMENT_TOTAL_SAMPLES = EXPERIMENT_SAMPLES_PER_CLASS * NUM_PATENT_CLASSES
-EXPERIMENT_FEW_SHOT_CONFIGS = [1, 2, 3, 5]
+EXPERIMENT_FEW_SHOT_CONFIGS = [1, 5]
 
 # Text processing limits
 MAX_TEXT_LENGTH_FOR_CLASSIFICATION = 500
@@ -374,9 +374,10 @@ def parse_unified_args():
     # Model configuration - using Phi-3 for better efficiency and performance
     PHI3_MODEL_PATH = 'microsoft/Phi-3-medium-4k-instruct'
     LLAMA_MODEL_PATH = './examples/offline_inference/basic/model_cache/llama-3.1-8b'
+    LLAMA_70B_QUANTIZED = 'hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4'
     
     parser.set_defaults(
-        model=PHI3_MODEL_PATH,  # Default to Phi-3 for better performance
+        model=LLAMA_70B_QUANTIZED,  # Default to Phi-3 for better performance
         gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION if '--vllm-optimizations' in parser.parse_known_args()[1] else 0.9,
         swap_space=VLLM_SWAP_SPACE,
         enforce_eager=False,  # Allow CUDA graphs

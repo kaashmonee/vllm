@@ -46,6 +46,7 @@ python examples/offline_inference/basic/classify_unified.py --model ./model_cach
 **Features:**
 - **Algorithmic Enhancements**: Enhanced prompts, advanced sampling, chain-of-thought, confidence scoring
 - **vLLM Optimizations**: Optimal batching, parallel sampling, logit bias, KV cache optimization
+- **Text Pooling**: Automatic segmentation and pooling of long patent texts (mean, max, attention-weighted strategies)
 - **Tensor Parallelism**: Split single model across multiple GPUs for memory efficiency
 - **Pipeline Parallelism**: Split model layers across GPUs for deeper models
 - **Ray Distributed Processing**: Horizontal scaling across multiple GPUs/nodes with fault tolerance
