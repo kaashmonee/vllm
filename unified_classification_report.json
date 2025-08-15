@@ -1,8 +1,45 @@
 {
   "experiment_metadata": {
-    "timestamp": "2025-08-15T02:03:09.133346",
-    "version": "unified_v1",
-    "model": "./examples/offline_inference/basic/model_cache/llama-3.1-8b",
+    "timestamp": "2025-08-15T18:46:52.268978",
+    "model": "hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4",
+    "dataset": "ccdv/patent-classification",
+    "total_classes": 9,
+    "class_names": {
+      "0": "Human Necessities",
+      "1": "Performing Operations; Transporting",
+      "2": "Chemistry; Metallurgy",
+      "3": "Textiles; Paper",
+      "4": "Fixed Constructions",
+      "5": "Mechanical Engineering; Lightning; Heating; Weapons; Blasting",
+      "6": "Physics",
+      "7": "Electricity",
+      "8": "General tagging of new or cross-sectional technology"
+    },
+    "dataset_info": {
+      "total_samples": 1493,
+      "class_distribution": {
+        "0": 160,
+        "1": 205,
+        "2": 143,
+        "3": 102,
+        "4": 109,
+        "5": 124,
+        "6": 256,
+        "7": 204,
+        "8": 190
+      },
+      "sampling_strategy": "advanced_stratified"
+    },
+    "experiment_config": {
+      "few_shot_configs_tested": [
+        1,
+        5
+      ],
+      "samples_per_class_target": 200,
+      "total_samples_target": 1800,
+      "confidence_level": 0.95,
+      "random_seed": 42
+    },
     "optimizations_enabled": {
       "enhanced_prompts": true,
       "advanced_sampling": true,
@@ -13,522 +50,197 @@
       "parallel_sampling": true
     }
   },
-  "results": [
+  "results_summary": {
+    "best_few_shot_config": {
+      "few_shot_count": 1,
+      "accuracy": 0.44783904619970194,
+      "processing_time": 389.8321511745453
+    },
+    "worst_few_shot_config": {
+      "few_shot_count": 5,
+      "accuracy": 0.43766756032171583
+    },
+    "overall_statistics": {
+      "mean_accuracy": 0.4427533032607089,
+      "accuracy_std": 0.005085742938993054,
+      "confidence_interval_95": [
+        0.37813281224099926,
+        0.5073737942804185
+      ],
+      "accuracy_range": [
+        0.43766756032171583,
+        0.44783904619970194
+      ]
+    }
+  },
+  "detailed_results": [
     {
       "few_shot_count": 1,
       "total_samples": 1493,
-      "valid_predictions": 1493,
-      "accuracy": 0.3643670462156731,
-      "confidence": 0.9610180843938378,
-      "processing_time": 108.72465658187866,
-      "throughput": 13.731935762663435,
+      "valid_predictions": 1342,
+      "invalid_predictions": 151,
+      "overall_accuracy": 0.44783904619970194,
+      "correct_predictions": 601,
+      "average_confidence": 0.9787133631395927,
       "per_class_metrics": {
         "0": {
-          "precision": 0.30689655172413793,
-          "recall": 0.55625,
-          "f1": 0.39555555555555555,
-          "support": 160
+          "precision": 0.5114942528735632,
+          "recall": 0.6357142857142857,
+          "f1": 0.5668789808917196,
+          "support": 140
         },
         "1": {
-          "precision": 0.3404255319148936,
-          "recall": 0.23414634146341465,
-          "f1": 0.2774566473988439,
-          "support": 205
+          "precision": 0.4153846153846154,
+          "recall": 0.3016759776536313,
+          "f1": 0.3495145631067961,
+          "support": 179
         },
         "2": {
-          "precision": 0.4810126582278481,
-          "recall": 0.5314685314685315,
-          "f1": 0.5049833887043188,
-          "support": 143
+          "precision": 0.4666666666666667,
+          "recall": 0.7596899224806202,
+          "f1": 0.5781710914454277,
+          "support": 129
         },
         "3": {
-          "precision": 0.8,
-          "recall": 0.27450980392156865,
-          "f1": 0.40875912408759124,
-          "support": 102
+          "precision": 0.9090909090909091,
+          "recall": 0.4,
+          "f1": 0.5555555555555556,
+          "support": 75
         },
         "4": {
-          "precision": 0.37254901960784315,
-          "recall": 0.3486238532110092,
-          "f1": 0.3601895734597157,
-          "support": 109
+          "precision": 0.5540540540540541,
+          "recall": 0.44086021505376344,
+          "f1": 0.4910179640718563,
+          "support": 93
         },
         "5": {
-          "precision": 0.26996197718631176,
-          "recall": 0.5725806451612904,
-          "f1": 0.3669250645994832,
-          "support": 124
+          "precision": 0.3463203463203463,
+          "recall": 0.6611570247933884,
+          "f1": 0.4545454545454545,
+          "support": 121
         },
         "6": {
-          "precision": 0.5094339622641509,
-          "recall": 0.2109375,
-          "f1": 0.2983425414364641,
-          "support": 256
+          "precision": 0.6116504854368932,
+          "recall": 0.26582278481012656,
+          "f1": 0.3705882352941176,
+          "support": 237
         },
         "7": {
-          "precision": 0.38439306358381503,
-          "recall": 0.6519607843137255,
-          "f1": 0.4836363636363637,
-          "support": 204
+          "precision": 0.43260188087774293,
+          "recall": 0.7225130890052356,
+          "f1": 0.5411764705882353,
+          "support": 191
         },
         "8": {
-          "precision": 0.1346153846153846,
-          "recall": 0.03684210526315789,
-          "f1": 0.05785123966942148,
-          "support": 190
+          "precision": 0.11764705882352941,
+          "recall": 0.04519774011299435,
+          "f1": 0.06530612244897958,
+          "support": 177
         }
       },
       "confusion_matrix": [
         [
           89,
-          6,
-          10,
-          1,
-          10,
-          20,
-          12,
-          9,
-          3
-        ],
-        [
-          40,
-          48,
-          17,
-          3,
-          25,
-          48,
-          2,
+          8,
           16,
-          6
-        ],
-        [
-          44,
-          4,
-          76,
-          1,
-          2,
-          3,
-          2,
-          3,
-          8
-        ],
-        [
-          28,
-          9,
-          12,
-          28,
-          7,
-          11,
           0,
-          6,
+          4,
+          11,
+          8,
+          3,
           1
         ],
         [
-          20,
-          22,
-          1,
-          0,
-          38,
-          24,
-          0,
-          1,
-          3
-        ],
-        [
-          10,
-          17,
-          4,
-          0,
-          8,
-          71,
-          1,
-          11,
-          2
-        ],
-        [
-          26,
-          10,
-          4,
-          1,
-          3,
-          17,
+          19,
           54,
-          130,
-          11
-        ],
-        [
-          5,
-          3,
-          6,
-          0,
-          0,
-          21,
-          25,
-          133,
-          11
-        ],
-        [
-          28,
-          22,
-          28,
-          1,
-          9,
-          48,
-          10,
-          37,
-          7
-        ]
-      ],
-      "optimizations_used": {
-        "enhanced_prompts": true,
-        "advanced_sampling": true,
-        "chain_of_thought": true,
-        "confidence_scoring": false,
-        "vllm_optimizations": true,
-        "optimal_batching": true,
-        "parallel_sampling": true
-      }
-    },
-    {
-      "few_shot_count": 2,
-      "total_samples": 1493,
-      "valid_predictions": 1493,
-      "accuracy": 0.37642330877428,
-      "confidence": 0.9657066309444073,
-      "processing_time": 115.03545570373535,
-      "throughput": 12.978607255184892,
-      "per_class_metrics": {
-        "0": {
-          "precision": 0.35,
-          "recall": 0.6125,
-          "f1": 0.4454545454545455,
-          "support": 160
-        },
-        "1": {
-          "precision": 0.33064516129032256,
-          "recall": 0.4,
-          "f1": 0.36203090507726265,
-          "support": 205
-        },
-        "2": {
-          "precision": 0.4764705882352941,
-          "recall": 0.5664335664335665,
-          "f1": 0.5175718849840256,
-          "support": 143
-        },
-        "3": {
-          "precision": 0.7272727272727273,
-          "recall": 0.3137254901960784,
-          "f1": 0.4383561643835617,
-          "support": 102
-        },
-        "4": {
-          "precision": 0.41025641025641024,
-          "recall": 0.14678899082568808,
-          "f1": 0.21621621621621623,
-          "support": 109
-        },
-        "5": {
-          "precision": 0.3939393939393939,
-          "recall": 0.31451612903225806,
-          "f1": 0.3497757847533632,
-          "support": 124
-        },
-        "6": {
-          "precision": 0.4946236559139785,
-          "recall": 0.1796875,
-          "f1": 0.26361031518624645,
-          "support": 256
-        },
-        "7": {
-          "precision": 0.35,
-          "recall": 0.7892156862745098,
-          "f1": 0.48493975903614456,
-          "support": 204
-        },
-        "8": {
-          "precision": 0.11666666666666667,
-          "recall": 0.03684210526315789,
-          "f1": 0.055999999999999994,
-          "support": 190
-        }
-      },
-      "confusion_matrix": [
-        [
-          98,
-          15,
-          10,
-          1,
-          3,
-          7,
-          11,
-          13,
-          2
-        ],
-        [
-          36,
-          82,
-          20,
-          5,
-          10,
-          14,
-          4,
           27,
-          7
-        ],
-        [
-          38,
-          4,
-          81,
-          1,
-          1,
-          3,
           2,
-          5,
-          8
-        ],
-        [
-          31,
-          10,
-          16,
-          32,
-          0,
-          3,
-          0,
-          9,
-          1
-        ],
-        [
-          22,
-          44,
-          1,
-          0,
-          16,
-          12,
-          3,
-          6,
-          5
-        ],
-        [
-          7,
-          35,
-          5,
-          1,
-          2,
+          14,
           39,
-          1,
-          29,
-          5
-        ],
-        [
-          18,
-          12,
-          3,
           2,
-          2,
-          8,
-          46,
-          153,
-          12
-        ],
-        [
-          2,
-          4,
-          6,
-          0,
-          0,
-          1,
-          17,
-          161,
-          13
-        ],
-        [
-          28,
-          42,
-          28,
-          2,
-          5,
-          12,
-          9,
-          57,
-          7
-        ]
-      ],
-      "optimizations_used": {
-        "enhanced_prompts": true,
-        "advanced_sampling": true,
-        "chain_of_thought": true,
-        "confidence_scoring": false,
-        "vllm_optimizations": true,
-        "optimal_batching": true,
-        "parallel_sampling": true
-      }
-    },
-    {
-      "few_shot_count": 3,
-      "total_samples": 1493,
-      "valid_predictions": 1493,
-      "accuracy": 0.38312123241795043,
-      "confidence": 0.9565974547890155,
-      "processing_time": 119.43925285339355,
-      "throughput": 12.500078193159766,
-      "per_class_metrics": {
-        "0": {
-          "precision": 0.3684210526315789,
-          "recall": 0.6125,
-          "f1": 0.460093896713615,
-          "support": 160
-        },
-        "1": {
-          "precision": 0.37435897435897436,
-          "recall": 0.35609756097560974,
-          "f1": 0.36500000000000005,
-          "support": 205
-        },
-        "2": {
-          "precision": 0.4785276073619632,
-          "recall": 0.5454545454545454,
-          "f1": 0.5098039215686275,
-          "support": 143
-        },
-        "3": {
-          "precision": 0.7272727272727273,
-          "recall": 0.3137254901960784,
-          "f1": 0.4383561643835617,
-          "support": 102
-        },
-        "4": {
-          "precision": 0.43661971830985913,
-          "recall": 0.28440366972477066,
-          "f1": 0.3444444444444445,
-          "support": 109
-        },
-        "5": {
-          "precision": 0.35877862595419846,
-          "recall": 0.3790322580645161,
-          "f1": 0.3686274509803922,
-          "support": 124
-        },
-        "6": {
-          "precision": 0.4642857142857143,
-          "recall": 0.203125,
-          "f1": 0.2826086956521739,
-          "support": 256
-        },
-        "7": {
-          "precision": 0.3370288248337029,
-          "recall": 0.7450980392156863,
-          "f1": 0.46412213740458025,
-          "support": 204
-        },
-        "8": {
-          "precision": 0.15,
-          "recall": 0.04736842105263158,
-          "f1": 0.072,
-          "support": 190
-        }
-      },
-      "confusion_matrix": [
-        [
-          98,
-          9,
-          9,
-          1,
-          9,
-          7,
-          11,
-          13,
-          3
-        ],
-        [
-          28,
-          73,
-          18,
-          7,
-          18,
-          20,
-          5,
-          30,
+          16,
           6
         ],
         [
-          43,
-          4,
-          78,
+          14,
+          2,
+          98,
           0,
           1,
-          1,
+          3,
           2,
-          6,
+          1,
           8
         ],
         [
+          11,
+          4,
+          10,
           30,
+          1,
           13,
-          14,
-          32,
           0,
-          3,
-          0,
-          9,
+          5,
           1
         ],
         [
-          17,
-          30,
-          1,
+          5,
+          18,
           0,
-          31,
-          17,
+          0,
+          41,
+          22,
+          0,
+          1,
+          6
+        ],
+        [
           2,
+          12,
           6,
-          5
-        ],
-        [
-          9,
-          22,
-          5,
-          1,
-          2,
-          47,
-          4,
-          29,
-          5
-        ],
-        [
-          15,
-          10,
-          3,
-          2,
-          3,
-          10,
-          52,
-          151,
-          10
-        ],
-        [
-          1,
-          2,
-          5,
           0,
-          0,
-          4,
-          27,
-          152,
-          13
+          3,
+          80,
+          3,
+          8,
+          7
         ],
         [
-          25,
-          32,
-          30,
-          1,
+          16,
           7,
-          22,
+          5,
+          1,
+          1,
+          11,
+          63,
+          116,
+          17
+        ],
+        [
+          0,
+          2,
+          8,
+          0,
+          0,
+          11,
+          18,
+          138,
+          14
+        ],
+        [
+          18,
+          23,
+          40,
+          0,
           9,
-          55,
-          9
+          41,
+          7,
+          31,
+          8
         ]
       ],
+      "processing_time_seconds": 389.8321511745453,
+      "samples_per_second": 3.8298534266649473,
       "optimizations_used": {
         "enhanced_prompts": true,
         "advanced_sampling": true,
@@ -542,168 +254,170 @@
     {
       "few_shot_count": 5,
       "total_samples": 1493,
-      "valid_predictions": 1493,
-      "accuracy": 0.3931681178834561,
-      "confidence": 0.9669122572002679,
-      "processing_time": 125.98132228851318,
-      "throughput": 11.85096308626481,
+      "valid_predictions": 1492,
+      "invalid_predictions": 1,
+      "overall_accuracy": 0.43766756032171583,
+      "correct_predictions": 653,
+      "average_confidence": 0.9697050938337801,
       "per_class_metrics": {
         "0": {
-          "precision": 0.3450479233226837,
-          "recall": 0.675,
-          "f1": 0.4566596194503171,
+          "precision": 0.5316455696202531,
+          "recall": 0.525,
+          "f1": 0.5283018867924528,
           "support": 160
         },
         "1": {
-          "precision": 0.36809815950920244,
-          "recall": 0.2926829268292683,
-          "f1": 0.32608695652173914,
+          "precision": 0.3670886075949367,
+          "recall": 0.424390243902439,
+          "f1": 0.39366515837104077,
           "support": 205
         },
         "2": {
-          "precision": 0.4253393665158371,
-          "recall": 0.6573426573426573,
-          "f1": 0.5164835164835164,
-          "support": 143
+          "precision": 0.49321266968325794,
+          "recall": 0.7676056338028169,
+          "f1": 0.6005509641873278,
+          "support": 142
         },
         "3": {
-          "precision": 0.6140350877192983,
-          "recall": 0.3431372549019608,
-          "f1": 0.440251572327044,
+          "precision": 0.7962962962962963,
+          "recall": 0.4215686274509804,
+          "f1": 0.5512820512820512,
           "support": 102
         },
         "4": {
-          "precision": 0.4411764705882353,
-          "recall": 0.27522935779816515,
-          "f1": 0.33898305084745767,
+          "precision": 0.5108695652173914,
+          "recall": 0.43119266055045874,
+          "f1": 0.46766169154228854,
           "support": 109
         },
         "5": {
-          "precision": 0.4392523364485981,
-          "recall": 0.3790322580645161,
-          "f1": 0.4069264069264069,
+          "precision": 0.3710691823899371,
+          "recall": 0.47580645161290325,
+          "f1": 0.4169611307420495,
           "support": 124
         },
         "6": {
-          "precision": 0.5294117647058824,
-          "recall": 0.17578125,
-          "f1": 0.26392961876832843,
+          "precision": 0.5540540540540541,
+          "recall": 0.3203125,
+          "f1": 0.40594059405940597,
           "support": 256
         },
         "7": {
-          "precision": 0.37922705314009664,
-          "recall": 0.7696078431372549,
-          "f1": 0.5080906148867315,
+          "precision": 0.45255474452554745,
+          "recall": 0.6078431372549019,
+          "f1": 0.5188284518828451,
           "support": 204
         },
         "8": {
-          "precision": 0.16923076923076924,
-          "recall": 0.05789473684210526,
-          "f1": 0.08627450980392157,
+          "precision": 0.12080536912751678,
+          "recall": 0.09473684210526316,
+          "f1": 0.10619469026548672,
           "support": 190
         }
       },
       "confusion_matrix": [
         [
-          108,
+          84,
+          14,
+          21,
+          1,
+          8,
           6,
-          13,
-          2,
-          7,
+          17,
           3,
-          9,
-          9,
-          3
-        ],
-        [
-          42,
-          60,
-          30,
-          11,
-          17,
-          17,
-          4,
-          18,
           6
         ],
         [
-          33,
-          3,
-          94,
+          14,
+          87,
+          24,
+          6,
+          19,
+          20,
+          5,
+          12,
+          18
+        ],
+        [
+          9,
+          5,
+          109,
           1,
+          2,
           1,
+          2,
           0,
+          13
+        ],
+        [
+          16,
+          8,
+          9,
+          43,
+          3,
+          15,
+          0,
+          7,
+          1
+        ],
+        [
+          4,
+          34,
           2,
-          2,
+          0,
+          47,
+          11,
+          0,
+          1,
+          10
+        ],
+        [
+          3,
+          35,
+          5,
+          0,
+          3,
+          59,
+          4,
+          8,
           7
         ],
         [
-          31,
-          8,
-          16,
-          35,
+          12,
+          7,
+          6,
+          1,
+          3,
+          9,
+          82,
+          91,
+          45
+        ],
+        [
           0,
+          5,
+          6,
           0,
           0,
           12,
-          0
+          26,
+          124,
+          31
         ],
         [
-          25,
-          26,
-          4,
-          3,
-          30,
-          11,
-          1,
-          2,
-          7
-        ],
-        [
-          13,
-          18,
-          8,
-          1,
-          3,
-          47,
-          3,
-          26,
-          5
-        ],
-        [
-          26,
-          9,
-          7,
-          2,
+          16,
+          42,
+          39,
           2,
           7,
-          45,
-          143,
-          15
-        ],
-        [
-          5,
-          2,
-          9,
-          0,
-          0,
-          3,
-          17,
-          157,
-          11
-        ],
-        [
-          30,
-          31,
-          40,
-          2,
-          8,
-          19,
-          4,
-          45,
-          11
+          26,
+          12,
+          28,
+          18
         ]
       ],
+      "processing_time_seconds": 415.5642330646515,
+      "samples_per_second": 3.5927057268370017,
       "optimizations_used": {
         "enhanced_prompts": true,
         "advanced_sampling": true,
@@ -714,5 +428,106 @@
         "parallel_sampling": true
       }
     }
-  ]
+  ],
+  "analysis": {
+    "per_class_performance": {
+      "0": {
+        "class_name": "Human Necessities",
+        "mean_f1": 0.5475904338420863,
+        "mean_precision": 0.5215699112469081,
+        "mean_recall": 0.5803571428571428,
+        "mean_support": 150.0,
+        "f1_std": 0.019288547049633398,
+        "best_f1": 0.5668789808917196,
+        "worst_f1": 0.5283018867924528
+      },
+      "1": {
+        "class_name": "Performing Operations; Transporting",
+        "mean_f1": 0.3715898607389184,
+        "mean_precision": 0.39123661148977606,
+        "mean_recall": 0.36303311077803513,
+        "mean_support": 192.0,
+        "f1_std": 0.022075297632122348,
+        "best_f1": 0.39366515837104077,
+        "worst_f1": 0.3495145631067961
+      },
+      "2": {
+        "class_name": "Chemistry; Metallurgy",
+        "mean_f1": 0.5893610278163777,
+        "mean_precision": 0.4799396681749623,
+        "mean_recall": 0.7636477781417186,
+        "mean_support": 135.5,
+        "f1_std": 0.01118993637095006,
+        "best_f1": 0.6005509641873278,
+        "worst_f1": 0.5781710914454277
+      },
+      "3": {
+        "class_name": "Textiles; Paper",
+        "mean_f1": 0.5534188034188035,
+        "mean_precision": 0.8526936026936027,
+        "mean_recall": 0.4107843137254902,
+        "mean_support": 88.5,
+        "f1_std": 0.0021367521367521847,
+        "best_f1": 0.5555555555555556,
+        "worst_f1": 0.5512820512820512
+      },
+      "4": {
+        "class_name": "Fixed Constructions",
+        "mean_f1": 0.4793398278070724,
+        "mean_precision": 0.5324618096357228,
+        "mean_recall": 0.4360264378021111,
+        "mean_support": 101.0,
+        "f1_std": 0.011678136264783895,
+        "best_f1": 0.4910179640718563,
+        "worst_f1": 0.46766169154228854
+      },
+      "5": {
+        "class_name": "Mechanical Engineering; Lightning; Heating; Weapons; Blasting",
+        "mean_f1": 0.43575329264375195,
+        "mean_precision": 0.3586947643551417,
+        "mean_recall": 0.5684817382031458,
+        "mean_support": 122.5,
+        "f1_std": 0.018792161901702492,
+        "best_f1": 0.4545454545454545,
+        "worst_f1": 0.4169611307420495
+      },
+      "6": {
+        "class_name": "Physics",
+        "mean_f1": 0.38826441467676176,
+        "mean_precision": 0.5828522697454737,
+        "mean_recall": 0.2930676424050633,
+        "mean_support": 246.5,
+        "f1_std": 0.01767617938264418,
+        "best_f1": 0.40594059405940597,
+        "worst_f1": 0.3705882352941176
+      },
+      "7": {
+        "class_name": "Electricity",
+        "mean_f1": 0.5300024612355402,
+        "mean_precision": 0.44257831270164516,
+        "mean_recall": 0.6651781131300687,
+        "mean_support": 197.5,
+        "f1_std": 0.01117400935269508,
+        "best_f1": 0.5411764705882353,
+        "worst_f1": 0.5188284518828451
+      },
+      "8": {
+        "class_name": "General tagging of new or cross-sectional technology",
+        "mean_f1": 0.08575040635723316,
+        "mean_precision": 0.1192262139755231,
+        "mean_recall": 0.06996729110912875,
+        "mean_support": 183.5,
+        "f1_std": 0.02044428390825357,
+        "best_f1": 0.10619469026548672,
+        "worst_f1": 0.06530612244897958
+      }
+    },
+    "recommendations": [
+      "Use 1 few-shot examples for optimal performance (0.448 accuracy)",
+      "Classes with poor performance (F1 < 0.5): Performing Operations; Transporting, Fixed Constructions, Mechanical Engineering; Lightning; Heating; Weapons; Blasting, Physics, General tagging of new or cross-sectional technology",
+      "Consider: (1) More few-shot examples for these classes, (2) Better example selection, (3) Class-specific prompt engineering",
+      "Highest throughput achieved: 3.8 samples/sec with 1-shot",
+      "Average prediction confidence: 0.974"
+    ]
+  }
 }
