@@ -93,8 +93,9 @@ def parse_args():
     # NOTE: Llama models require HuggingFace authentication
     # Run: huggingface-cli login or set HF_TOKEN environment variable
     # Accept license at: https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct
+    MODEL_PATH = './examples/offline_inference/basic/model_cache/llama-3.1-8b'
     parser.set_defaults(
-        model="meta-llama/Meta-Llama-3.1-8B-Instruct",  # Larger model for better few-shot prompting
+        model=MODEL_PATH,  # Larger model for better few-shot prompting
         enforce_eager=True,
     )
     return parser.parse_args()
