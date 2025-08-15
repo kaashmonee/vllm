@@ -51,15 +51,6 @@ vLLM experiment mode:
 Ultimate experiment (all optimizations):
     python examples/offline_inference/basic/classify_unified.py --experiment --enhanced-prompts --advanced-sampling --vllm-optimizations --optimal-batching --parallel-sampling --use-logit-bias --chain-of-thought
 
-Multi-LoRA adapter inference:
-    python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-adapter-dir ./lora_adapters --enhanced-prompts
-
-Single LoRA adapter for specific domain:
-    python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-adapter-dir ./lora_adapters --lora-domain chemical_materials
-
-LoRA ensemble mode (all adapters vote):
-    python examples/offline_inference/basic/classify_unified.py --experiment --use-lora-adapters --lora-adapter-dir ./lora_adapters --lora-ensemble-mode
-
 Use Llama instead of default Phi-3:
     python examples/offline_inference/basic/classify_unified.py --model ./examples/offline_inference/basic/model_cache/llama-3.1-8b --experiment --enhanced-prompts
 
@@ -90,13 +81,6 @@ vLLM Optimizations:
 --use-logit-bias: Bias toward classification tokens (0-8) for better accuracy
 --kv-cache-optimization: Optimize KV cache usage with consistent prompt prefixes
 --custom-batch-size N: Override default batch size
-
-LoRA Multi-Adapter Options:
---use-lora-adapters: Enable LoRA adapter inference
---lora-adapter-dir PATH: Directory containing trained LoRA adapters
---lora-domain DOMAIN: Use specific domain adapter (chemical_materials, engineering_mechanical, etc.)
---lora-ensemble-mode: Use ensemble voting across all adapters
---lora-confidence-threshold: Minimum confidence threshold for LoRA predictions
 
 Parallelism Options:
 --ray-distributed: Use Ray distributed processing across multiple workers/nodes
@@ -163,7 +147,6 @@ import json
 from datetime import datetime
 import re
 from typing import Dict, List, Tuple, Optional, Union
-from pathlib import Path
 
 from vllm import LLM, EngineArgs, SamplingParams
 from vllm.utils import FlexibleArgumentParser
@@ -189,22 +172,6 @@ try:
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
-
-# LoRA adapter imports with fallbacks
-try:
-    from peft import PeftModel, PeftConfig
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from lora_domain_config import (
-        PATENT_DOMAIN_GROUPS, 
-        LORA_TRAINING_CONFIGS,
-        MULTI_ADAPTER_CONFIG,
-        route_patent_to_domain,
-        get_domain_for_class
-    )
-    LORA_AVAILABLE = True
-except ImportError:
-    LORA_AVAILABLE = False
-    print("Info: PEFT not available. LoRA adapter support disabled. Install with: pip install peft")
 
 # Patent classification classes
 PATENT_CLASSES = {
@@ -283,9 +250,6 @@ EXPERIMENT_FEW_SHOT_CONFIGS = [1, 5]
 MAX_TEXT_LENGTH_FOR_CLASSIFICATION = 500
 MAX_TEXT_LENGTH_FOR_EXAMPLES = 200
 MAX_TEXT_LENGTH_FOR_DISPLAY = 150
-
-# Model sequence length limits
-MAX_SEQUENCE_LENGTH = 2048  # Maximum input sequence length for models
 
 # Enhanced limits for optimized mode
 ENHANCED_MAX_TEXT_LENGTH_FOR_CLASSIFICATION = 800
@@ -392,18 +356,6 @@ def parse_unified_args():
     parser.add_argument("--custom-batch-size", type=int,
                        help="Custom batch size override")
     
-    # LoRA multi-adapter flags
-    parser.add_argument("--use-lora-adapters", action="store_true",
-                       help="Enable LoRA adapter inference")
-    parser.add_argument("--lora-adapter-dir", type=str, default="./lora_adapters",
-                       help="Directory containing trained LoRA adapters")
-    parser.add_argument("--lora-domain", type=str,
-                       help="Use specific domain adapter (chemical_materials, engineering_mechanical, etc.)")
-    parser.add_argument("--lora-ensemble-mode", action="store_true",
-                       help="Use ensemble voting across all adapters")
-    parser.add_argument("--lora-confidence-threshold", type=float, default=0.7,
-                       help="Minimum confidence threshold for LoRA predictions")
-    
     # Ray distributed processing flags
     parser.add_argument("--ray-distributed", action="store_true",
                        help="Enable Ray distributed processing for large workloads")
@@ -458,16 +410,6 @@ class UnifiedPatentClassifier:
         self.use_kv_cache_optimization = args.kv_cache_optimization and args.vllm_optimizations
         self.use_ray_distributed = args.ray_distributed
         
-        # LoRA adapter configuration
-        self.use_lora_adapters = args.use_lora_adapters and LORA_AVAILABLE
-        if self.use_lora_adapters:
-            self.lora_adapter_dir = Path(args.lora_adapter_dir)
-            self.lora_domain = args.lora_domain
-            self.lora_ensemble_mode = args.lora_ensemble_mode
-            self.lora_confidence_threshold = args.lora_confidence_threshold
-            self.lora_models = {}  # Cache for loaded LoRA models
-            self.lora_tokenizer = None
-        
         # Ray configuration
         if self.use_ray_distributed:
             self.num_ray_workers = args.num_ray_workers
@@ -493,12 +435,6 @@ class UnifiedPatentClassifier:
         print(f"   Optimal batching: {self.use_optimal_batching}")
         print(f"   Parallel sampling: {self.use_parallel_sampling}")
         print(f"   Ray distributed: {self.use_ray_distributed}")
-        print(f"   LoRA adapters: {self.use_lora_adapters}")
-        if self.use_lora_adapters:
-            print(f"   LoRA adapter dir: {self.lora_adapter_dir}")
-            if self.lora_domain:
-                print(f"   LoRA specific domain: {self.lora_domain}")
-            print(f"   LoRA ensemble mode: {self.lora_ensemble_mode}")
         if self.tensor_parallel_size > 1 or self.pipeline_parallel_size > 1:
             print(f"   Tensor parallel size: {self.tensor_parallel_size}")
             print(f"   Pipeline parallel size: {self.pipeline_parallel_size}")
@@ -600,13 +536,7 @@ class UnifiedPatentClassifier:
         if self.use_logit_bias:
             self._initialize_class_token_ids()
         
-        # Initialize LoRA adapters if enabled
-        if self.use_lora_adapters:
-            self.initialize_lora_adapters()
-        
         print(f"✅ Engine initialized with model: {self.args.model}")
-        if self.use_lora_adapters:
-            print(f"✅ LoRA adapter system ready")
         
     def _initialize_class_token_ids(self):
         """Initialize token IDs for class numbers."""
@@ -619,322 +549,6 @@ class UnifiedPatentClassifier:
         except Exception as e:
             print(f"⚠️  Could not initialize class token IDs: {e}")
             self.use_logit_bias = False
-    
-    def initialize_lora_adapters(self):
-        """Initialize LoRA adapters if enabled."""
-        if not self.use_lora_adapters:
-            return
-        
-        if not LORA_AVAILABLE:
-            print("❌ LoRA support not available. Install with: pip install peft")
-            self.use_lora_adapters = False
-            return
-        
-        print("🎯 Initializing LoRA adapters...")
-        
-        # Initialize separate model and tokenizer for LoRA inference
-        try:
-            self.lora_tokenizer = AutoTokenizer.from_pretrained(
-                self.args.model,
-                trust_remote_code=True,
-                padding_side="right"
-            )
-            
-            if self.lora_tokenizer.pad_token is None:
-                self.lora_tokenizer.pad_token = self.lora_tokenizer.eos_token
-            
-            # Load base model for LoRA - handle AWQ vs regular models
-            model_loading_kwargs = {
-                "device_map": "auto",
-                "torch_dtype": torch.float16,
-                "trust_remote_code": True,
-            }
-            
-            # Only add quantization for non-AWQ models
-            if "AWQ" not in self.args.model.upper():
-                from transformers import BitsAndBytesConfig
-                
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4",
-                )
-                model_loading_kwargs["quantization_config"] = quantization_config
-                print("🔧 Using BitsAndBytesConfig for LoRA base model")
-            else:
-                print("🔧 Using pre-quantized AWQ model for LoRA")
-            
-            self.lora_base_model = AutoModelForCausalLM.from_pretrained(
-                self.args.model,
-                **model_loading_kwargs
-            )
-            
-            print(f"✅ LoRA base model initialized")
-            
-            # Discover and validate available adapters
-            available_adapters = self._discover_lora_adapters()
-            if not available_adapters:
-                print("❌ No valid LoRA adapters found")
-                self.use_lora_adapters = False
-                return
-            
-            print(f"📋 Available LoRA adapters: {available_adapters}")
-            
-        except Exception as e:
-            print(f"❌ Failed to initialize LoRA system: {e}")
-            self.use_lora_adapters = False
-    
-    def _discover_lora_adapters(self) -> List[str]:
-        """Discover available LoRA adapters in the adapter directory."""
-        if not LORA_AVAILABLE:
-            return []
-        
-        available_adapters = []
-        
-        if not self.lora_adapter_dir.exists():
-            print(f"⚠️  LoRA adapter directory not found: {self.lora_adapter_dir}")
-            return available_adapters
-        
-        for domain_dir in self.lora_adapter_dir.iterdir():
-            if domain_dir.is_dir() and domain_dir.name in PATENT_DOMAIN_GROUPS:
-                final_dir = domain_dir / "final"
-                if final_dir.exists() and (final_dir / "adapter_config.json").exists():
-                    available_adapters.append(domain_dir.name)
-        
-        return available_adapters
-    
-    def _load_lora_adapter(self, domain: str) -> bool:
-        """Load a specific LoRA adapter for a domain."""
-        if domain in self.lora_models:
-            return True  # Already loaded
-        
-        if not LORA_AVAILABLE:
-            return False
-        
-        adapter_path = self.lora_adapter_dir / domain / "final"
-        
-        if not adapter_path.exists():
-            print(f"❌ LoRA adapter not found: {adapter_path}")
-            return False
-        
-        try:
-            print(f"📦 Loading LoRA adapter: {domain}")
-            start_time = time.time()
-            
-            # Load LoRA model
-            lora_model = PeftModel.from_pretrained(
-                self.lora_base_model,
-                str(adapter_path),
-                torch_dtype=torch.float16,
-            )
-            
-            self.lora_models[domain] = lora_model
-            
-            load_time = time.time() - start_time
-            print(f"✅ Loaded {domain} LoRA adapter in {load_time:.1f} seconds")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Failed to load LoRA adapter {domain}: {e}")
-            return False
-    
-    def _select_lora_adapters(self, patent_text: str) -> List[str]:
-        """Select the most relevant LoRA adapters for a patent text."""
-        if not LORA_AVAILABLE:
-            return []
-        
-        if self.lora_domain:
-            # Use specific domain if specified
-            return [self.lora_domain]
-        
-        available_adapters = self._discover_lora_adapters()
-        
-        if self.lora_ensemble_mode:
-            # Use all available adapters for ensemble
-            return available_adapters[:ENSEMBLE_MAX_ADAPTERS]
-        
-        # Use keyword-based routing for single/multi-adapter selection
-        primary_domain = route_patent_to_domain(patent_text)
-        
-        if primary_domain in available_adapters:
-            selected_adapters = [primary_domain]
-            
-            # Add additional adapters based on keyword overlap
-            text_lower = patent_text.lower()
-            adapter_scores = {}
-            
-            for domain in available_adapters:
-                if domain != primary_domain:
-                    domain_config = PATENT_DOMAIN_GROUPS[domain]
-                    # Count keyword matches in first few keywords (most distinctive)
-                    score = sum(1 for keyword in domain_config["keywords"][:5] 
-                              if keyword in text_lower)
-                    if score >= ADAPTER_KEYWORD_MATCH_THRESHOLD:
-                        adapter_scores[domain] = score
-            
-            # Add top scoring additional adapters
-            top_additional = sorted(adapter_scores.items(), 
-                                  key=lambda x: x[1], reverse=True)
-            
-            for domain, score in top_additional[:MAX_ADAPTERS_TO_TRY - 1]:
-                selected_adapters.append(domain)
-            
-            return selected_adapters[:MAX_ADAPTERS_TO_TRY]
-        
-        # Fallback: use first available adapters
-        return available_adapters[:MAX_ADAPTERS_TO_TRY]
-    
-    def _predict_with_lora_adapter(self, patent_text: str, domain: str) -> Tuple[Optional[int], float]:
-        """Make prediction using a specific LoRA adapter."""
-        if not LORA_AVAILABLE:
-            return None, 0.0
-        
-        if domain not in self.lora_models:
-            if not self._load_lora_adapter(domain):
-                return None, 0.0
-        
-        model = self.lora_models[domain]
-        domain_config = PATENT_DOMAIN_GROUPS[domain]
-        class_names = domain_config["target_classes"]
-        
-        # Create domain-specific prompt
-        truncated_text = patent_text[:ADAPTER_MAX_INPUT_LENGTH]
-        prompt = f"""You are a patent classification expert specializing in {domain_config['description']}.
-
-Classify this patent text into one of these categories:
-{chr(10).join([f"{k}: {v}" for k, v in class_names.items()])}
-
-Key terms: {', '.join(domain_config['keywords'][:8])}
-
-Patent Text: {truncated_text}
-
-Classification (respond with only the number):"""
-        
-        try:
-            # Tokenize input
-            inputs = self.lora_tokenizer(
-                prompt, 
-                return_tensors="pt", 
-                truncation=True, 
-                max_length=MAX_SEQUENCE_LENGTH
-            )
-            inputs = {k: v.to(model.device) for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                # Generate multiple samples for confidence estimation
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=MAX_CLASSIFICATION_TOKENS,
-                    num_return_sequences=ENSEMBLE_GENERATION_SAMPLES,
-                    do_sample=True,
-                    temperature=ADAPTER_TEMPERATURE_SAMPLING,
-                    pad_token_id=self.lora_tokenizer.eos_token_id,
-                    eos_token_id=self.lora_tokenizer.eos_token_id,
-                )
-            
-            # Extract and parse predictions
-            predictions = []
-            for output in outputs:
-                response = self.lora_tokenizer.decode(
-                    output[inputs['input_ids'].shape[1]:], 
-                    skip_special_tokens=True
-                ).strip()
-                
-                prediction = self._parse_lora_prediction(response, class_names)
-                if prediction is not None:
-                    predictions.append(prediction)
-            
-            if not predictions:
-                return None, 0.0
-            
-            # Calculate confidence as agreement rate
-            prediction_counts = Counter(predictions)
-            most_common_pred, most_common_count = prediction_counts.most_common(1)[0]
-            confidence = most_common_count / len(predictions)
-            
-            return most_common_pred, confidence
-            
-        except Exception as e:
-            print(f"❌ LoRA prediction failed for domain {domain}: {e}")
-            return None, 0.0
-    
-    def _parse_lora_prediction(self, response: str, valid_classes: Dict[int, str]) -> Optional[int]:
-        """Parse prediction from LoRA adapter response."""
-        import re
-        
-        # Look for standalone digits in valid class range
-        response_snippet = response[:ADAPTER_RESPONSE_MAX_LENGTH]
-        digit_matches = re.findall(r'\b([0-8])\b', response_snippet)
-        
-        for digit_str in digit_matches:
-            digit = int(digit_str)
-            if digit in valid_classes:
-                return digit
-        
-        return None
-    
-    def predict_with_lora_ensemble(self, patent_text: str) -> Tuple[Optional[int], float, str]:
-        """Make ensemble prediction using multiple LoRA adapters."""
-        if not self.use_lora_adapters or not LORA_AVAILABLE:
-            return None, 0.0, "lora_disabled"
-        
-        selected_adapters = self._select_lora_adapters(patent_text)
-        
-        if not selected_adapters:
-            return None, 0.0, "no_adapters_selected"
-        
-        adapter_results = []
-        
-        # Get predictions from selected adapters
-        for domain in selected_adapters:
-            prediction, confidence = self._predict_with_lora_adapter(patent_text, domain)
-            if prediction is not None and confidence > 0:
-                adapter_results.append((prediction, confidence, domain))
-        
-        if not adapter_results:
-            return None, 0.0, "all_adapters_failed"
-        
-        if self.lora_ensemble_mode and len(adapter_results) >= ENSEMBLE_MIN_ADAPTERS:
-            # Ensemble voting with confidence weighting
-            return self._lora_ensemble_predict(adapter_results)
-        else:
-            # Return highest confidence single prediction
-            best_result = max(adapter_results, key=lambda x: x[1])
-            prediction, confidence, domain = best_result
-            
-            if confidence >= self.lora_confidence_threshold:
-                return prediction, confidence, f"lora_single_{domain}"
-            else:
-                return None, confidence, f"lora_low_confidence_{domain}"
-    
-    def _lora_ensemble_predict(self, adapter_results: List[Tuple[int, float, str]]) -> Tuple[Optional[int], float, str]:
-        """Perform ensemble prediction across multiple LoRA adapters."""
-        if not adapter_results:
-            return None, 0.0, "lora_ensemble_empty"
-        
-        # Weight predictions by confidence squared (emphasize high confidence)
-        weighted_votes = {}
-        total_weight = 0
-        
-        for prediction, confidence, domain in adapter_results:
-            weight = confidence ** ENSEMBLE_CONFIDENCE_WEIGHT_EXPONENT
-            weighted_votes[prediction] = weighted_votes.get(prediction, 0) + weight
-            total_weight += weight
-        
-        if total_weight == 0:
-            return None, 0.0, "lora_ensemble_zero_weight"
-        
-        # Find prediction with highest weighted vote
-        best_prediction = max(weighted_votes, key=weighted_votes.get)
-        ensemble_confidence = weighted_votes[best_prediction] / total_weight
-        
-        # Apply confidence threshold
-        if ensemble_confidence >= self.lora_confidence_threshold:
-            domains_used = [domain for _, _, domain in adapter_results]
-            return best_prediction, ensemble_confidence, f"lora_ensemble_{'+'.join(domains_used)}"
-        else:
-            return None, ensemble_confidence, "lora_ensemble_low_confidence"
     
     def create_sampling_params(self):
         """Create sampling parameters based on active optimizations."""
@@ -1091,68 +705,14 @@ Answer:"""
         
         return prompt
     
-    def process_batch(self, prompts: List[str], texts: Optional[List[str]] = None):
+    def process_batch(self, prompts: List[str]):
         """Process batch of prompts with appropriate optimization."""
-        # Use LoRA adapters if enabled and texts are provided
-        if self.use_lora_adapters and texts is not None:
-            return self._process_with_lora_adapters(texts)
-        
-        # Standard vLLM processing
         sampling_params = self.create_sampling_params()
         
         if self.use_optimal_batching:
             return self._process_with_optimal_batching(prompts, sampling_params)
         else:
             return self.llm.generate(prompts, sampling_params=sampling_params)
-    
-    def _process_with_lora_adapters(self, texts: List[str]):
-        """Process texts using LoRA adapters instead of vLLM."""
-        print(f"🎯 Processing {len(texts)} texts with LoRA adapters...")
-        start_time = time.time()
-        
-        # Create pseudo-outputs compatible with vLLM format for downstream processing
-        lora_outputs = []
-        successful_predictions = 0
-        
-        for i, text in enumerate(texts):
-            # Get LoRA prediction
-            prediction, confidence, method = self.predict_with_lora_ensemble(text)
-            
-            # Create pseudo-output compatible with vLLM RequestOutput format
-            if prediction is not None:
-                # Format as string response for compatibility with extract_predictions
-                response_text = str(prediction)
-                successful_predictions += 1
-            else:
-                response_text = "None"
-            
-            # Create a simple object with the expected interface
-            class LoRAOutput:
-                def __init__(self, text_response, pred_confidence, pred_method):
-                    self.outputs = [type('', (), {
-                        'text': text_response,
-                        'confidence': pred_confidence,
-                        'method': pred_method
-                    })()]
-            
-            lora_output = LoRAOutput(response_text, confidence, method)
-            lora_outputs.append(lora_output)
-            
-            # Progress updates for large batches
-            if (i + 1) % 50 == 0 or i == len(texts) - 1:
-                progress = (i + 1) / len(texts) * 100
-                processing_time = time.time() - start_time
-                rate = (i + 1) / processing_time if processing_time > 0 else 0
-                print(f"   LoRA Progress: {progress:.1f}% ({i + 1}/{len(texts)}, {rate:.1f}/sec)")
-        
-        processing_time = time.time() - start_time
-        throughput = len(texts) / processing_time
-        
-        print(f"✅ LoRA processing completed in {processing_time:.1f}s")
-        print(f"   Throughput: {throughput:.1f} samples/sec")
-        print(f"   Successful predictions: {successful_predictions}/{len(texts)}")
-        
-        return lora_outputs
     
     def _process_with_optimal_batching(self, prompts: List[str], sampling_params):
         """Process with optimal batching."""
@@ -1936,13 +1496,12 @@ def run_unified_experiment(args):
             prompt = classifier.create_prompt(text, few_shot_subset)
             prompts.append(prompt)
         
-        # Run classification (LoRA, Ray distributed, or regular)
+        # Run classification (Ray distributed or regular)
         print(f"Running few-shot classification with {len(prompts)} prompts...")
         if classifier.use_ray_distributed:
             outputs = classifier.process_with_ray_distributed(prompts, few_shot_count)
         else:
-            # Pass original texts to enable LoRA processing if configured
-            outputs = classifier.process_batch(prompts, texts)
+            outputs = classifier.process_batch(prompts)
         
         # Extract predictions
         predictions, confidences = classifier.extract_predictions(outputs)
@@ -2037,13 +1596,12 @@ def main(args: Namespace):
         prompt = classifier.create_prompt(text, few_shot_examples)
         prompts.append(prompt)
     
-    # Process (LoRA, Ray distributed, or regular)
+    # Process (Ray distributed or regular)
     start_time = time.time()
     if classifier.use_ray_distributed:
         outputs = classifier.process_with_ray_distributed(prompts)
     else:
-        # Pass original texts to enable LoRA processing if configured
-        outputs = classifier.process_batch(prompts, texts)
+        outputs = classifier.process_batch(prompts)
     processing_time = time.time() - start_time
     
     # Extract and evaluate
