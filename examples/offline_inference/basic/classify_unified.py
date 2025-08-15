@@ -9,16 +9,19 @@ optimizations.
 
 SETUP REQUIREMENTS:
 1. HuggingFace Authentication:
-   - Run: huggingface-cli login
+   - Run: huggingface-cli login (recommended for best download speeds)
    - Or set: export HF_TOKEN="your_token_here"
-   - Accept license: https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct
+   - For Llama models: Accept license at https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct
+   - For Phi-3 models: No license acceptance required (openly available)
 
 2. Install Dependencies:
    - pip install datasets scikit-learn scipy (for advanced features)
    - Ensure vLLM is properly installed with GPU support
 
 3. Hardware Requirements:
-   - GPU with at least 16GB VRAM (24GB+ recommended for optimal batching)
+   - Phi-3: GPU with at least 12GB VRAM (more efficient)
+   - Llama-3.1-8B: GPU with at least 16GB VRAM 
+   - 24GB+ VRAM recommended for optimal batching with either model
    - CUDA-compatible GPU for best performance
    - Sufficient CPU RAM for dataset loading
 
@@ -47,6 +50,9 @@ vLLM experiment mode:
 
 Ultimate experiment (all optimizations):
     python examples/offline_inference/basic/classify_unified.py --experiment --enhanced-prompts --advanced-sampling --vllm-optimizations --optimal-batching --parallel-sampling --use-logit-bias --chain-of-thought
+
+Use Llama instead of default Phi-3:
+    python examples/offline_inference/basic/classify_unified.py --model ./examples/offline_inference/basic/model_cache/llama-3.1-8b --experiment --enhanced-prompts
 
 FEATURE FLAGS:
 
@@ -268,13 +274,18 @@ def parse_unified_args():
     parser.add_argument("--custom-batch-size", type=int,
                        help="Custom batch size override")
     
-    # Model configuration
-    MODEL_PATH = './examples/offline_inference/basic/model_cache/llama-3.1-8b'
+    # Model configuration - using Phi-3 for better efficiency and performance
+    PHI3_MODEL_PATH = 'microsoft/Phi-3-medium-4k-instruct'
+    LLAMA_MODEL_PATH = './examples/offline_inference/basic/model_cache/llama-3.1-8b'
+    
     parser.set_defaults(
-        model=MODEL_PATH,
+        model=PHI3_MODEL_PATH,  # Default to Phi-3 for better performance
         gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION if '--vllm-optimizations' in parser.parse_known_args()[1] else 0.9,
         swap_space=VLLM_SWAP_SPACE,
         enforce_eager=False,  # Allow CUDA graphs
+        trust_remote_code=True,  # Required for Phi-3
+        dtype="auto",  # Let vLLM choose optimal precision
+        max_model_len=4096,  # Phi-3 context length
     )
     
     return parser.parse_args()
@@ -873,53 +884,263 @@ def calculate_confusion_matrix(true_labels, predicted_labels):
     return confusion_matrix
 
 
+def calculate_confidence_intervals(accuracy_scores, confidence_level=CONFIDENCE_LEVEL):
+    """Calculate confidence intervals for accuracy scores."""
+    try:
+        if SCIPY_AVAILABLE:
+            # Use scipy if available for more accurate confidence intervals
+            from scipy import stats
+            mean_accuracy = np.mean(accuracy_scores)
+            sem = stats.sem(accuracy_scores)  # Standard error of mean
+            interval = sem * stats.t.ppf((1 + confidence_level) / 2, len(accuracy_scores) - 1)
+            return mean_accuracy, mean_accuracy - interval, mean_accuracy + interval
+    except ImportError:
+        pass
+    
+    # Fallback to normal approximation
+    mean_accuracy = np.mean(accuracy_scores)
+    std_error = np.std(accuracy_scores) / np.sqrt(len(accuracy_scores))
+    # Use 1.96 for 95% confidence interval (normal approximation)
+    margin = 1.96 * std_error
+    return mean_accuracy, mean_accuracy - margin, mean_accuracy + margin
+
+
+def generate_experiment_report(experiment_results, dataset_info, model_name, classifier):
+    """Generate comprehensive experiment report like original classify.py."""
+    report = {
+        'experiment_metadata': {
+            'timestamp': datetime.now().isoformat(),
+            'model': model_name,
+            'dataset': 'ccdv/patent-classification',
+            'total_classes': NUM_PATENT_CLASSES,
+            'class_names': PATENT_CLASSES,
+            'dataset_info': dataset_info,
+            'experiment_config': {
+                'few_shot_configs_tested': EXPERIMENT_FEW_SHOT_CONFIGS,
+                'samples_per_class_target': EXPERIMENT_SAMPLES_PER_CLASS,
+                'total_samples_target': EXPERIMENT_TOTAL_SAMPLES,
+                'confidence_level': CONFIDENCE_LEVEL,
+                'random_seed': RANDOM_SEED
+            },
+            'optimizations_enabled': {
+                'enhanced_prompts': classifier.use_enhanced_prompts,
+                'advanced_sampling': classifier.use_advanced_sampling,
+                'chain_of_thought': classifier.use_chain_of_thought,
+                'confidence_scoring': classifier.use_confidence_scoring,
+                'vllm_optimizations': classifier.use_vllm_optimizations,
+                'optimal_batching': classifier.use_optimal_batching,
+                'parallel_sampling': classifier.use_parallel_sampling,
+            }
+        },
+        'results_summary': {},
+        'detailed_results': experiment_results,
+        'analysis': {}
+    }
+    
+    # Summary statistics
+    accuracies = [result['overall_accuracy'] for result in experiment_results]
+    best_config = max(experiment_results, key=lambda x: x['overall_accuracy'])
+    worst_config = min(experiment_results, key=lambda x: x['overall_accuracy'])
+    
+    mean_acc, ci_lower, ci_upper = calculate_confidence_intervals(accuracies)
+    
+    report['results_summary'] = {
+        'best_few_shot_config': {
+            'few_shot_count': best_config['few_shot_count'],
+            'accuracy': best_config['overall_accuracy'],
+            'processing_time': best_config['processing_time_seconds']
+        },
+        'worst_few_shot_config': {
+            'few_shot_count': worst_config['few_shot_count'], 
+            'accuracy': worst_config['overall_accuracy']
+        },
+        'overall_statistics': {
+            'mean_accuracy': mean_acc,
+            'accuracy_std': np.std(accuracies),
+            'confidence_interval_95': [ci_lower, ci_upper],
+            'accuracy_range': [min(accuracies), max(accuracies)]
+        }
+    }
+    
+    # Per-class analysis across all configurations
+    class_performance = {}
+    for class_id in range(NUM_PATENT_CLASSES):
+        class_name = PATENT_CLASSES[class_id]
+        f1_scores = []
+        precisions = []
+        recalls = []
+        supports = []
+        
+        for result in experiment_results:
+            if class_id in result['per_class_metrics']:
+                metrics = result['per_class_metrics'][class_id]
+                f1_scores.append(metrics['f1'])
+                precisions.append(metrics['precision'])
+                recalls.append(metrics['recall'])
+                supports.append(metrics['support'])
+        
+        if f1_scores:  # Only add if we have data
+            class_performance[class_id] = {
+                'class_name': class_name,
+                'mean_f1': np.mean(f1_scores),
+                'mean_precision': np.mean(precisions),
+                'mean_recall': np.mean(recalls),
+                'mean_support': np.mean(supports),
+                'f1_std': np.std(f1_scores),
+                'best_f1': max(f1_scores),
+                'worst_f1': min(f1_scores)
+            }
+    
+    report['analysis'] = {
+        'per_class_performance': class_performance,
+        'recommendations': generate_recommendations(experiment_results, class_performance, classifier)
+    }
+    
+    return report
+
+
+def generate_recommendations(experiment_results, class_performance, classifier):
+    """Generate recommendations based on experiment results."""
+    recommendations = []
+    
+    # Best few-shot configuration
+    best_result = max(experiment_results, key=lambda x: x['overall_accuracy'])
+    recommendations.append(f"Use {best_result['few_shot_count']} few-shot examples for optimal performance ({best_result['overall_accuracy']:.3f} accuracy)")
+    
+    # Identify problematic classes
+    poor_classes = [(class_id, metrics) for class_id, metrics in class_performance.items() 
+                   if metrics['mean_f1'] < 0.5]
+    
+    if poor_classes:
+        poor_class_names = [metrics['class_name'] for _, metrics in poor_classes]
+        recommendations.append(f"Classes with poor performance (F1 < 0.5): {', '.join(poor_class_names)}")
+        recommendations.append("Consider: (1) More few-shot examples for these classes, (2) Better example selection, (3) Class-specific prompt engineering")
+    
+    # Performance vs speed tradeoff
+    fastest = min(experiment_results, key=lambda x: x['processing_time_seconds'])
+    if fastest != best_result:
+        recommendations.append(f"For speed, use {fastest['few_shot_count']} examples ({fastest['samples_per_second']:.1f} samples/sec, {fastest['overall_accuracy']:.3f} accuracy)")
+    
+    # Optimization-specific recommendations
+    if classifier.use_vllm_optimizations:
+        best_throughput = max(experiment_results, key=lambda x: x['samples_per_second'])
+        recommendations.append(f"Highest throughput achieved: {best_throughput['samples_per_second']:.1f} samples/sec with {best_throughput['few_shot_count']}-shot")
+    
+    if classifier.use_confidence_scoring or classifier.use_parallel_sampling:
+        avg_confidence = np.mean([r.get('average_confidence', 0) for r in experiment_results])
+        recommendations.append(f"Average prediction confidence: {avg_confidence:.3f}")
+    
+    # Advanced feature recommendations
+    if not classifier.use_enhanced_prompts:
+        recommendations.append("Consider using --enhanced-prompts for better class descriptions")
+    if not classifier.use_advanced_sampling:
+        recommendations.append("Consider using --advanced-sampling for better class balance")
+    if not classifier.use_vllm_optimizations:
+        recommendations.append("Consider using --vllm-optimizations for better throughput")
+    
+    return recommendations
+
+
+def print_experiment_summary(report):
+    """Print experiment summary to console like original classify.py."""
+    print("\n" + "=" * 80)
+    print("EXPERIMENT SUMMARY")
+    print("=" * 80)
+    
+    summary = report['results_summary']
+    best = summary['best_few_shot_config']
+    stats = summary['overall_statistics']
+    
+    print(f"Best Configuration: {best['few_shot_count']}-shot examples")
+    print(f"Best Accuracy: {best['accuracy']:.3f}")
+    print(f"Mean Accuracy: {stats['mean_accuracy']:.3f} ± {stats['accuracy_std']:.3f}")
+    print(f"95% Confidence Interval: [{stats['confidence_interval_95'][0]:.3f}, {stats['confidence_interval_95'][1]:.3f}]")
+    
+    print("\nTop 3 Performing Classes:")
+    class_perf = report['analysis']['per_class_performance']
+    sorted_classes = sorted(class_perf.items(), key=lambda x: x[1]['mean_f1'], reverse=True)
+    
+    for i, (class_id, metrics) in enumerate(sorted_classes[:3]):
+        print(f"  {i+1}. {metrics['class_name']}: F1={metrics['mean_f1']:.3f}")
+    
+    print("\nBottom 3 Performing Classes:")
+    for i, (class_id, metrics) in enumerate(sorted_classes[-3:]):
+        print(f"  {i+1}. {metrics['class_name']}: F1={metrics['mean_f1']:.3f}")
+    
+    print("\nOptimizations Used:")
+    opt_meta = report['experiment_metadata']['optimizations_enabled']
+    active_optimizations = [name for name, enabled in opt_meta.items() if enabled]
+    if active_optimizations:
+        for opt in active_optimizations:
+            print(f"  • {opt.replace('_', ' ').title()}")
+    else:
+        print("  • None (baseline mode)")
+    
+    print("\nRecommendations:")
+    for i, rec in enumerate(report['analysis']['recommendations'], 1):
+        print(f"  {i}. {rec}")
+
+
 def run_unified_experiment(args):
-    """Run unified experiment with selected optimizations."""
+    """Run unified experiment with detailed reporting like original classify.py."""
     print("=" * 80)
     print("🔥 UNIFIED PATENT CLASSIFICATION EXPERIMENT")
     print("=" * 80)
+    
+    # Set random seed for reproducibility
+    np.random.seed(RANDOM_SEED)
     
     # Initialize classifier
     classifier = UnifiedPatentClassifier(args)
     classifier.initialize_engine()
     
-    # Load dataset
-    print("📚 Loading dataset...")
+    # Load large evaluation dataset
+    print(f"Loading large evaluation dataset ({EXPERIMENT_TOTAL_SAMPLES} samples)...")
     texts, true_labels = load_patent_dataset_unified(args)
-    print(f"✅ Loaded {len(texts)} samples")
     
-    # Load few-shot examples
-    print("🎯 Loading few-shot examples...")
+    dataset_info = {
+        'total_samples': len(texts),
+        'class_distribution': dict(Counter(true_labels)),
+        'sampling_strategy': 'advanced_stratified' if args.advanced_sampling else 'stratified'
+    }
+    
+    print(f"Loaded {len(texts)} samples from patent classification dataset")
+    print(f"Class distribution: {Counter(true_labels)}")
+    
+    # Load few-shot examples (use maximum needed)
+    max_few_shot = max(EXPERIMENT_FEW_SHOT_CONFIGS)
+    print(f"Loading few-shot examples (up to {max_few_shot} per class)...")
     few_shot_examples = load_few_shot_examples_unified(args)
-    print(f"✅ Loaded examples for {len(few_shot_examples)} classes")
+    print(f"Loaded few-shot examples for {len(few_shot_examples)} classes")
     
-    # Run experiments
+    # Run experiments with different few-shot configurations
     experiment_results = []
     total_start_time = time.time()
     
     for few_shot_count in EXPERIMENT_FEW_SHOT_CONFIGS:
-        print(f"\n🔄 Running {few_shot_count}-shot experiment...")
+        print(f"\n--- Running experiment with {few_shot_count} few-shot examples ---")
+        
+        start_time = time.time()
         
         # Prepare few-shot subset
         few_shot_subset = {}
         for class_id, examples in few_shot_examples.items():
-            few_shot_subset[class_id] = examples[:few_shot_count]
+            few_shot_subset[class_id] = examples[:few_shot_count] if len(examples) >= few_shot_count else examples
         
-        # Create prompts
+        # Generate prompts
         prompts = []
         for text in texts:
             prompt = classifier.create_prompt(text, few_shot_subset)
             prompts.append(prompt)
         
-        # Process batch
-        start_time = time.time()
+        # Run classification
+        print(f"Running few-shot classification with {len(prompts)} prompts...")
         outputs = classifier.process_batch(prompts)
-        processing_time = time.time() - start_time
         
         # Extract predictions
         predictions, confidences = classifier.extract_predictions(outputs)
         
-        # Filter predictions based on confidence if enabled
+        # Filter valid predictions
         if classifier.use_confidence_scoring:
             valid_indices = [i for i, (pred, conf) in enumerate(zip(predictions, confidences)) 
                            if pred is not None and conf >= VLLM_CONFIDENCE_THRESHOLD]
@@ -930,9 +1151,11 @@ def run_unified_experiment(args):
         valid_true_labels = [true_labels[i] for i in valid_indices]
         valid_confidences = [confidences[i] for i in valid_indices]
         
+        end_time = time.time()
+        
         # Calculate metrics
         correct = sum(1 for t, p in zip(valid_true_labels, valid_predictions) if t == p)
-        accuracy = correct / len(valid_predictions) if valid_predictions else 0
+        overall_accuracy = correct / len(valid_predictions) if valid_predictions else 0
         avg_confidence = np.mean(valid_confidences) if valid_confidences else 0
         per_class_metrics = calculate_per_class_metrics(valid_true_labels, valid_predictions)
         confusion_matrix = calculate_confusion_matrix(valid_true_labels, valid_predictions)
@@ -941,12 +1164,14 @@ def run_unified_experiment(args):
             'few_shot_count': few_shot_count,
             'total_samples': len(texts),
             'valid_predictions': len(valid_predictions),
-            'accuracy': accuracy,
-            'confidence': avg_confidence,
-            'processing_time': processing_time,
-            'throughput': len(texts) / processing_time,
+            'invalid_predictions': len(predictions) - len(valid_predictions),
+            'overall_accuracy': overall_accuracy,
+            'correct_predictions': correct,
+            'average_confidence': avg_confidence,
             'per_class_metrics': per_class_metrics,
             'confusion_matrix': confusion_matrix.tolist(),
+            'processing_time_seconds': end_time - start_time,
+            'samples_per_second': len(texts) / (end_time - start_time),
             'optimizations_used': {
                 'enhanced_prompts': classifier.use_enhanced_prompts,
                 'advanced_sampling': classifier.use_advanced_sampling,
@@ -959,40 +1184,27 @@ def run_unified_experiment(args):
         }
         
         experiment_results.append(result)
-        print(f"✅ Accuracy: {accuracy:.3f}, Confidence: {avg_confidence:.3f}, Throughput: {len(texts)/processing_time:.1f} samples/sec")
+        print(f"Completed {few_shot_count}-shot: {overall_accuracy:.3f} accuracy, {end_time - start_time:.1f}s")
+        
+        if classifier.use_confidence_scoring or classifier.use_parallel_sampling:
+            print(f"Average confidence: {avg_confidence:.3f}")
+        
+        print(f"Successfully classified {len(valid_predictions)}/{len(predictions)} samples")
     
     total_time = time.time() - total_start_time
-    print(f"\n🏁 Total experiment time: {total_time:.1f} seconds")
+    print(f"\nTotal experiment time: {total_time:.1f} seconds")
     
-    # Generate and save report
-    report = {
-        'experiment_metadata': {
-            'timestamp': datetime.now().isoformat(),
-            'version': 'unified_v1',
-            'model': args.model,
-            'optimizations_enabled': {
-                'enhanced_prompts': classifier.use_enhanced_prompts,
-                'advanced_sampling': classifier.use_advanced_sampling,
-                'chain_of_thought': classifier.use_chain_of_thought,
-                'confidence_scoring': classifier.use_confidence_scoring,
-                'vllm_optimizations': classifier.use_vllm_optimizations,
-                'optimal_batching': classifier.use_optimal_batching,
-                'parallel_sampling': classifier.use_parallel_sampling,
-            }
-        },
-        'results': experiment_results
-    }
+    # Generate comprehensive report like original classify.py
+    report = generate_experiment_report(experiment_results, dataset_info, args.model, classifier)
     
+    # Save report
     with open(args.output_report, 'w') as f:
         json.dump(report, f, indent=2)
     
-    # Print summary
-    best_result = max(experiment_results, key=lambda x: x['accuracy'])
-    print(f"\n🏆 BEST RESULT:")
-    print(f"   • Configuration: {best_result['few_shot_count']}-shot")
-    print(f"   • Accuracy: {best_result['accuracy']:.3f}")
-    print(f"   • Confidence: {best_result['confidence']:.3f}")
-    print(f"   • Throughput: {best_result['throughput']:.1f} samples/sec")
+    print(f"\nDetailed report saved to: {args.output_report}")
+    
+    # Print experiment summary like original classify.py
+    print_experiment_summary(report)
     
     return report
 
@@ -1043,15 +1255,18 @@ def main(args: Namespace):
     throughput = len(texts) / processing_time
     per_class_metrics = calculate_per_class_metrics(valid_true_labels, valid_predictions)
     
-    print(f"\n🎯 UNIFIED RESULTS:")
-    print(f"   • Accuracy: {accuracy:.3f}")
-    print(f"   • Average confidence: {avg_confidence:.3f}")
-    print(f"   • Valid predictions: {len(valid_predictions)}/{len(predictions)}")
-    print(f"   • Throughput: {throughput:.1f} samples/sec")
-    print(f"   • Processing time: {processing_time:.1f}s")
+    print(f"\nSuccessfully classified {len(valid_predictions)}/{len(predictions)} samples")
     
-    # Show per-class results
-    print(f"\n📊 PER-CLASS PERFORMANCE:")
+    # Calculate overall accuracy
+    print(f"\nOverall Accuracy: {accuracy:.3f} ({sum(1 for t, p in zip(valid_true_labels, valid_predictions) if t == p)}/{len(valid_predictions)})")
+    
+    if classifier.use_confidence_scoring or classifier.use_parallel_sampling:
+        print(f"Average Confidence: {avg_confidence:.3f}")
+    
+    print(f"Processing Speed: {throughput:.1f} samples/sec ({processing_time:.1f}s total)")
+    
+    # Show per-class results like original classify.py
+    print("\nPer-Class Results:")
     print("=" * 100)
     print(f"{'Class':<5} {'Name':<50} {'Precision':<10} {'Recall':<10} {'F1':<10} {'Support':<10}")
     print("=" * 100)
@@ -1060,6 +1275,47 @@ def main(args: Namespace):
         metrics = per_class_metrics[class_id]
         class_name = PATENT_CLASSES[class_id][:47] + "..." if len(PATENT_CLASSES[class_id]) > 50 else PATENT_CLASSES[class_id]
         print(f"{class_id:<5} {class_name:<50} {metrics['precision']:<10.3f} {metrics['recall']:<10.3f} {metrics['f1']:<10.3f} {metrics['support']:<10}")
+    
+    # Show some example classifications like original classify.py
+    print("\nExample Classifications:")
+    print("=" * 120)
+    for i in range(min(5, len(valid_indices))):
+        idx = valid_indices[i]
+        text_preview = texts[idx][:MAX_TEXT_LENGTH_FOR_DISPLAY] + "..."
+        true_class = PATENT_CLASSES[true_labels[idx]]
+        pred_class = PATENT_CLASSES[valid_predictions[i]]
+        status = "✓" if true_labels[idx] == valid_predictions[i] else "✗"
+        
+        print(f"{status} Text: {text_preview}")
+        print(f"  True: {true_class}")
+        print(f"  Pred: {pred_class}")
+        if classifier.use_confidence_scoring or classifier.use_parallel_sampling:
+            print(f"  Conf: {valid_confidences[i]:.3f}")
+        print("-" * 120)
+    
+    # Show optimization summary
+    print(f"\n🔧 OPTIMIZATIONS USED:")
+    active_opts = []
+    if classifier.use_enhanced_prompts:
+        active_opts.append("Enhanced prompts")
+    if classifier.use_advanced_sampling:
+        active_opts.append("Advanced sampling")  
+    if classifier.use_chain_of_thought:
+        active_opts.append("Chain of thought")
+    if classifier.use_confidence_scoring:
+        active_opts.append("Confidence scoring")
+    if classifier.use_vllm_optimizations:
+        active_opts.append("vLLM optimizations")
+    if classifier.use_optimal_batching:
+        active_opts.append("Optimal batching")
+    if classifier.use_parallel_sampling:
+        active_opts.append("Parallel sampling")
+    
+    if active_opts:
+        for opt in active_opts:
+            print(f"   • {opt}")
+    else:
+        print("   • None (baseline mode)")
 
 
 if __name__ == "__main__":
