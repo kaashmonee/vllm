@@ -264,20 +264,22 @@ class VLLMOptimizedClassifier:
         """Create vLLM-optimized sampling parameters."""
         n_samples = VLLM_SAMPLES_PER_PREDICTION if use_parallel_sampling else 1
         
+        # For parallel sampling, need non-zero temperature
+        if use_parallel_sampling:
+            temperature = max(0.1, VLLM_CLASSIFICATION_TEMPERATURE)  # Minimum 0.1 for sampling
+        else:
+            temperature = VLLM_CLASSIFICATION_TEMPERATURE  # Can be 0.0 for greedy when n=1
+        
         sampling_params = SamplingParams(
-            temperature=VLLM_CLASSIFICATION_TEMPERATURE,
+            temperature=temperature,
             top_p=VLLM_TOP_P,
             top_k=VLLM_TOP_K,
             max_tokens=VLLM_MAX_TOKENS,
             frequency_penalty=VLLM_FREQUENCY_PENALTY,
             presence_penalty=VLLM_PRESENCE_PENALTY,
             n=n_samples,
-            best_of=n_samples if n_samples > 1 else None,
-            use_beam_search=False,  # Greedy/sampling is better for classification
             stop=["\n", ".", "!", "?", ";"],  # Stop early for classification
-            include_stop_str_in_output=False,
             skip_special_tokens=True,
-            spaces_between_special_tokens=False,
         )
         
         # Add logit bias if enabled
@@ -467,48 +469,75 @@ Answer:"""
 
 
 def load_patent_dataset_optimized(num_samples=450):
-    """Load patent dataset with vLLM optimization considerations."""
+    """Load patent dataset using the working logic from classify_optimized.py."""
     if not DATASETS_AVAILABLE:
-        return generate_fallback_data(), list(range(5))
+        print("Using fallback sample data since datasets library is not available.")
+        return generate_fallback_data(), [6, 0, 7, 5, 2]
     
     try:
+        # Load the patent classification dataset
         dataset = load_dataset("ccdv/patent-classification", split="test")
         
-        # Advanced stratified sampling
+        # Use advanced stratified sampling from classify_optimized.py
         labels = dataset["label"]
         class_counts = Counter(labels)
         total_samples = len(labels)
         
-        # Ensure balanced sampling for better batching
-        samples_per_class = num_samples // NUM_PATENT_CLASSES
-        remainder = num_samples % NUM_PATENT_CLASSES
+        # Calculate minimum samples per class (at least 50 for robust statistics)
+        min_samples_per_class = max(50, num_samples // (NUM_PATENT_CLASSES * 2))
         
+        samples_per_class = {}
+        remaining_samples = num_samples
+        
+        # First, ensure minimum samples for all classes
+        for class_id in range(NUM_PATENT_CLASSES):
+            if class_id in class_counts:
+                samples_per_class[class_id] = min_samples_per_class
+                remaining_samples -= min_samples_per_class
+            else:
+                samples_per_class[class_id] = 0
+        
+        # Distribute remaining samples proportionally
+        for class_id, count in class_counts.items():
+            if remaining_samples > 0:
+                proportion = count / total_samples
+                additional_samples = int(remaining_samples * proportion)
+                samples_per_class[class_id] += additional_samples
+                remaining_samples -= additional_samples
+        
+        print(f"🎯 Advanced sampling - samples per class: {samples_per_class}")
+        
+        # Sample from each class with replacement for minority classes
         sampled_texts = []
         sampled_labels = []
         
-        for class_id in range(NUM_PATENT_CLASSES):
+        for class_id, target_count in samples_per_class.items():
+            if target_count == 0:
+                continue
+                
             class_indices = [i for i, label in enumerate(labels) if label == class_id]
             
-            if class_indices:
-                target_count = samples_per_class + (1 if class_id < remainder else 0)
-                selected_indices = np.random.choice(
-                    class_indices, 
-                    size=min(target_count, len(class_indices)),
-                    replace=len(class_indices) < target_count
-                )
-                
-                for idx in selected_indices:
-                    sampled_texts.append(dataset["text"][int(idx)])
-                    sampled_labels.append(class_id)
+            if len(class_indices) >= target_count:
+                # Normal sampling
+                selected_indices = np.random.choice(class_indices, size=target_count, replace=False)
+            else:
+                # Oversample minority class
+                selected_indices = np.random.choice(class_indices, size=target_count, replace=True)
+            
+            for idx in selected_indices:
+                idx = int(idx)
+                sampled_texts.append(dataset["text"][idx])
+                sampled_labels.append(dataset["label"][idx])
         
-        print(f"🎯 Loaded {len(sampled_texts)} samples with balanced distribution")
+        print(f"✅ Loaded {len(sampled_texts)} samples from patent classification dataset")
         print(f"   Class distribution: {Counter(sampled_labels)}")
         
         return sampled_texts, sampled_labels
     
     except Exception as e:
         print(f"❌ Error loading dataset: {e}")
-        return generate_fallback_data(), list(range(5))
+        print("Using fallback sample data.")
+        return generate_fallback_data(), [6, 0, 7, 5, 2]
 
 
 def generate_fallback_data():
